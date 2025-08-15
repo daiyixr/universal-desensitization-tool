@@ -1,0 +1,33 @@
+名称：构建 macOS 可执行文件
+
+在:
+  推:
+    分支：[ 主 ]
+  工作流派送:
+
+工作:
+  build-macos：
+    运行于：macos-latest
+    步骤:
+      - 名称: 结账代码
+        使用：actions/checkout@v3
+
+      - 名称: 设置Python
+        使用：actions/setup-python@v4
+        与：
+          python-version：'3.11'
+
+      - 名称: 安装依赖项
+        运行： |
+          python -m pip install --upgrade pip
+          使用pip安装pyinstaller：pip install pyinstaller
+
+      - 名称: 生成可执行文件
+        运行： |
+          pyinstaller --onefile FileMasker.py
+
+      - 名称: 上传工件
+        使用：actions/upload-artifact@v4
+        与：
+          name：FileMasker-macOS
+          路径: dist/FileMasker      
