@@ -1,19 +1,86 @@
-﻿import os
+﻿# Copyright 2023-2025 daiyixr
+# # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#     http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
 import sys
 import re
+import io
+import json
+import time
+import random
+import string
 import tempfile
 import requests
 import webbrowser
+import fitz
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QTextEdit, QPushButton, QFileDialog, QMessageBox, 
     QGroupBox, QScrollArea, QInputDialog, QDialog, 
     QLineEdit, QDialogButtonBox, QComboBox, QProgressBar,
-    QMenu, QAction, QTabWidget, QTableWidget, QTableWidgetItem, QCheckBox
+    QFormLayout, QSpinBox, QMenu, QAction, QTabWidget, QTableWidget, QTableWidgetItem, QCheckBox,
+    QProgressDialog
 )
 from PyQt5.QtGui import (QIcon, QColor, QPalette, QLinearGradient, 
-                         QBrush, QFont, QPixmap, QPainter)
-from PyQt5.QtCore import Qt
+                         QBrush, QFont, QPixmap, QPainter, QImage, QPen)
+from PyQt5.QtCore import Qt, QTimer, QRectF
+
+
+def _draw_certificate_pixmap(
+    size: int,
+    base_color: str = "#3E5F53",
+    text_color: str = "#FFFFFF",
+    border_color: str = "#5A8A7A",
+) -> QPixmap:
+    """绘制带有证书徽章风格的单个尺寸图标。"""
+
+    image = QImage(size, size, QImage.Format_ARGB32)
+    image.fill(QColor(0, 0, 0, 0))
+
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    margin = size * 0.1
+    rect = QRectF(margin, margin, size - 2 * margin, size - 2 * margin)
+    radius = size * 0.22
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(base_color))
+    painter.drawRoundedRect(rect, radius, radius)
+
+    inner_margin = size * 0.04
+    inner_rect = rect.adjusted(inner_margin, inner_margin, -inner_margin, -inner_margin)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(QColor(border_color), max(1.0, size * 0.06)))
+    painter.drawRoundedRect(inner_rect, radius * 0.85, radius * 0.85)
+
+    painter.setPen(QPen(QColor(text_color)))
+    font = QFont("Microsoft YaHei", max(10, int(size * 0.38)))
+    font.setBold(True)
+    painter.setFont(font)
+    painter.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, "敏")
+
+    painter.end()
+    return QPixmap.fromImage(image)
+
+
+def create_pen_icon() -> QIcon:
+    """生成用于窗口的多尺寸图标。"""
+
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 96, 128):
+        icon.addPixmap(_draw_certificate_pixmap(size))
+    return icon
 from dataclasses import dataclass
 from typing import List, Optional, TYPE_CHECKING
 
@@ -352,8 +419,8 @@ class RuleEngine:
                     else:
                         redacted = "*" * len(match)
                 else:
-                    # 改进的默认脱敏方式：使用智能脱敏逻辑
-                    # 调用智能脱敏函数，避免全星号替换
+                    # 改进的默认脱敏方式：使用内置算法
+                    # 调用内置算法函数，避免全星号替换
                     redacted = self.smart_redact_for_rule_engine(match)
                 
                 result = result.replace(match, redacted)
@@ -362,7 +429,7 @@ class RuleEngine:
             return text
     
     def smart_redact_for_rule_engine(self, text):
-        """规则引擎专用的智能脱敏函数"""
+        """规则引擎专用的内置算法脱敏函数"""
         import re
         
         # 检测文本类型并应用相应脱敏规则
@@ -388,14 +455,6 @@ class RuleEngine:
         # 银行卡号（16-19位数字）
         elif re.match(r'^\d{16,19}$', text):
             return text[:4] + "*" * (len(text) - 8) + text[-4:]
-        
-        # 座机号码（带区号）
-        elif re.match(r'^0\d{2,3}-?\d{7,8}$', text):
-            if '-' in text:
-                parts = text.split('-')
-                return parts[0] + "-****" + parts[1][-4:]
-            else:
-                return text[:4] + "****" + text[-4:]
         
         # 车牌号
         elif re.match(r'^[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-Z]\d{5}$', text):
@@ -500,21 +559,8 @@ class UniversalRedactionTool(QMainWindow):
             if valid:
                 # 将有效姓名添加到姓名规则中
                 self.update_name_rule_with_custom_names(valid)
-                save_btn.setText("✅ 已识别")
-                save_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #27ae60;
-                        color: white;
-                        border: none;
-                        border-radius: 5px;
-                        padding: 10px 20px;
-                        font-size: 14px;
-                        font-weight: bold;
-                    }
-                    QPushButton:hover {
-                        background-color: #229954;
-                    }
-                """)
+                save_btn.setText("已识别")
+                self.set_hollow_button(save_btn, "#27ae60", font_size="14px", padding="10px 20px")
         
         def on_save_and_close():
             if valid_names:
@@ -537,54 +583,15 @@ class UniversalRedactionTool(QMainWindow):
         btn_layout = QHBoxLayout()
         
         save_btn = QPushButton("确定并识别")
-        save_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(save_btn, "#3498db", font_size="14px", padding="10px 20px")
         save_btn.clicked.connect(on_confirm)
         
         close_btn = QPushButton("取消")
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #95a5a6;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #7f8c8d;
-            }
-        """)
+        self.set_hollow_button(close_btn, "#95a5a6", font_size="14px", padding="10px 20px")
         close_btn.clicked.connect(on_cancel_name)
         
         save_and_close_btn = QPushButton("保存并关闭")
-        save_and_close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-        """)
+        self.set_hollow_button(save_and_close_btn, "#e74c3c", font_size="14px", padding="10px 20px")
         save_and_close_btn.clicked.connect(on_save_and_close)
         
         btn_layout.addWidget(save_btn)
@@ -649,21 +656,8 @@ class UniversalRedactionTool(QMainWindow):
             if valid:
                 # 将有效字段添加到自定义字段规则中
                 self.update_custom_field_rule_with_fields(valid)
-                save_btn.setText("✅ 已识别")
-                save_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #27ae60;
-                        color: white;
-                        border: none;
-                        border-radius: 5px;
-                        padding: 10px 20px;
-                        font-size: 14px;
-                        font-weight: bold;
-                    }
-                    QPushButton:hover {
-                        background-color: #229954;
-                    }
-                """)
+                save_btn.setText("已识别")
+                self.set_hollow_button(save_btn, "#27ae60", font_size="14px", padding="10px 20px")
         
         def on_save_and_close():
             if valid_fields:
@@ -682,20 +676,7 @@ class UniversalRedactionTool(QMainWindow):
         btn_layout = QHBoxLayout()
         
         save_btn = QPushButton("确定并识别")
-        save_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(save_btn, "#3498db", font_size="14px", padding="10px 20px")
         save_btn.clicked.connect(on_confirm)
         
         def on_cancel():
@@ -703,37 +684,11 @@ class UniversalRedactionTool(QMainWindow):
             dialog.reject()
         
         close_btn = QPushButton("取消")
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #95a5a6;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #7f8c8d;
-            }
-        """)
+        self.set_hollow_button(close_btn, "#95a5a6", font_size="14px", padding="10px 20px")
         close_btn.clicked.connect(on_cancel)
         
         save_and_close_btn = QPushButton("保存并关闭")
-        save_and_close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-        """)
+        self.set_hollow_button(save_and_close_btn, "#e74c3c", font_size="14px", padding="10px 20px")
         save_and_close_btn.clicked.connect(on_save_and_close)
         
         btn_layout.addWidget(save_btn)
@@ -901,6 +856,597 @@ class UniversalRedactionTool(QMainWindow):
         # 调用统一的加载方法
         self.load_unified_custom_rules()
 
+    # ======== PDF 处理核心方法（PyMuPDF版） ========
+    def reset_pdf_state(self):
+        """清空当前的PDF解析状态"""
+        self.pdf_doc = None
+        self.pdf_char_map = []
+        self.pdf_font_cache = {}
+        self.pdf_display_text = ""
+        self.pdf_pending_redactions = []
+        self.pdf_fallback_font_alias = None
+        self.pdf_font_counter = 0
+
+    def _allocate_pdf_font_name(self, prefix="font_alias"):
+        """生成唯一的PDF字体别名，避免重复注册"""
+        self.pdf_font_counter += 1
+        return f"{prefix}_{self.pdf_font_counter}"
+
+    def normalize_pdf_font_name(self, font_name):
+        """清理PDF字体名称中的随机前缀/修饰"""
+        if not font_name:
+            return ""
+        try:
+            name = str(font_name)
+            if "+" in name:
+                name = name.split("+")[-1]
+            if "," in name:
+                name = name.split(",")[0]
+            return name.strip()
+        except Exception:
+            return str(font_name) if font_name else ""
+
+    def register_pdf_fallback_font(self):
+        """为PDF写入注册中文兼容的后备字体"""
+        if getattr(self, 'pdf_fallback_font_alias', None):
+            return self.pdf_fallback_font_alias
+
+        if not self.pdf_doc:
+            return None
+
+        font_candidates = [
+            (r"C:/Windows/Fonts/msyh.ttc", 0),
+            (r"C:/Windows/Fonts/msyh.ttf", None),
+            (r"C:/Windows/Fonts/simsun.ttc", 0),
+            (r"C:/Windows/Fonts/simhei.ttf", None),
+            (r"C:/Windows/Fonts/simfang.ttf", None),
+        ]
+
+        for path, ttc_index in font_candidates:
+            try:
+                if not os.path.exists(path):
+                    continue
+                alias_name = self._allocate_pdf_font_name("font_fallback")
+                insert_kwargs = {
+                    "fontname": alias_name,
+                    "subset": False,
+                }
+                if path.lower().endswith('.ttc'):
+                    insert_kwargs["fontfile"] = path
+                    insert_kwargs["ttc_index"] = ttc_index or 0
+                else:
+                    insert_kwargs["fontfile"] = path
+                self.pdf_doc.insert_font(**insert_kwargs)
+                self.pdf_fallback_font_alias = alias_name
+                return alias_name
+            except Exception as font_err:
+                print(f"注册PDF后备字体失败: {path} -> {font_err}")
+                continue
+
+        self.pdf_fallback_font_alias = None
+        return None
+
+    def pdf_text_requires_ext_font(self, text):
+        """判断文本中是否包含需要CJK/全宽支持的字符"""
+        if not text:
+            return False
+        for ch in text:
+            code = ord(ch)
+            if code > 127 and not (0x2000 <= code <= 0x206F):  # 排除常见的空格/标点
+                return True
+        return False
+
+    def normalize_pdf_color(self, color_value):
+        """将PyMuPDF颜色值统一转换为RGB元组"""
+        try:
+            if isinstance(color_value, (tuple, list)) and len(color_value) >= 3:
+                comps = [float(c) for c in color_value[:3]]
+                max_comp = max(comps) if comps else 1.0
+                if max_comp > 1.0:
+                    comps = [c / 255.0 for c in comps]
+                return tuple(comps)
+            if isinstance(color_value, int):
+                r, g, b = fitz.utils.int_to_rgb(color_value)
+                return (r / 255.0, g / 255.0, b / 255.0)
+        except Exception:
+            pass
+        return (0.0, 0.0, 0.0)
+
+    def estimate_char_bbox(self, span_bbox, char_index, total_chars):
+        """在缺少逐字符位置信息时，按平均宽度估算字符边界"""
+        if not span_bbox or total_chars <= 0:
+            return [0, 0, 0, 0]
+        x0, y0, x1, y1 = span_bbox
+        width = max((x1 - x0) / max(total_chars, 1), 0.5)
+        start_x = x0 + width * char_index
+        end_x = start_x + width
+        return [start_x, y0, end_x, y1]
+
+    def load_pdf_with_pymupdf(self, pdf_path):
+        """使用PyMuPDF解析PDF并构建字符映射"""
+        try:
+            doc = fitz.open(pdf_path)
+        except Exception as e:
+            QMessageBox.warning(self, "警告", f"无法打开PDF文件: {str(e)}")
+            return None
+
+        self.pdf_doc = doc
+        self.pdf_char_map = []
+        self.pdf_display_text = ""
+        display_chars = []
+        char_index = 0
+
+        for page_index in range(doc.page_count):
+            page = doc.load_page(page_index)
+            try:
+                raw_dict = page.get_text("rawdict")
+            except Exception:
+                raw_dict = None
+
+            if not raw_dict:
+                continue
+
+            blocks = raw_dict.get("blocks", [])
+            last_font = "helv"
+            last_size = 12.0
+            last_color = (0.0, 0.0, 0.0)
+
+            for block in blocks:
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        font = span.get("font") or last_font
+                        size = float(span.get("size") or last_size)
+                        color_value = span.get("color", 0)
+                        rgb_color = self.normalize_pdf_color(color_value)
+                        chars = span.get("chars")
+                        text = span.get("text", "")
+                        span_bbox = span.get("bbox")
+
+                        if chars:
+                            iterable = chars
+                        else:
+                            iterable = []
+                            for idx, ch in enumerate(text):
+                                if not ch:
+                                    continue
+                                estimated_bbox = self.estimate_char_bbox(span_bbox, idx, len(text))
+                                iterable.append({"c": ch, "bbox": estimated_bbox})
+
+                        for char_info in iterable:
+                            char_text = char_info.get("c", "")
+                            if not char_text:
+                                continue
+                            bbox = char_info.get("bbox")
+                            display_chars.append(char_text)
+                            self.pdf_char_map.append({
+                                "index": char_index,
+                                "char": char_text,
+                                "page": page_index,
+                                "bbox": bbox,
+                                "font": font,
+                                "size": size,
+                                "color": rgb_color,
+                            })
+                            char_index += 1
+
+                        last_font = font
+                        last_size = size
+                        last_color = rgb_color
+
+                    # 行末追加换行符，保持展示结构
+                    display_chars.append("\n")
+                    self.pdf_char_map.append({
+                        "index": char_index,
+                        "char": "\n",
+                        "page": page_index,
+                        "bbox": None,
+                        "font": last_font,
+                        "size": last_size,
+                        "color": last_color,
+                    })
+                    char_index += 1
+
+            # 页面末尾再补充一个换行，分隔页面
+            if display_chars and display_chars[-1] != "\n":
+                display_chars.append("\n")
+                self.pdf_char_map.append({
+                    "index": char_index,
+                    "char": "\n",
+                    "page": page_index,
+                    "bbox": None,
+                    "font": last_font,
+                    "size": last_size,
+                    "color": last_color,
+                })
+                char_index += 1
+
+        self.pdf_display_text = ''.join(display_chars)
+        return self.pdf_display_text
+
+    def build_pdf_font_cache(self):
+        """缓存PDF中使用的字体，方便后续复用原字体"""
+        if not self.pdf_doc:
+            return
+
+        font_map = {}
+        for page_index in range(self.pdf_doc.page_count):
+            for font_info in self.pdf_doc.get_page_fonts(page_index):
+                xref = font_info[0]
+                base_name = font_info[3]
+                if base_name and base_name not in font_map:
+                    font_map[base_name] = xref
+
+        alias_cache = {}
+        for base_name, xref in font_map.items():
+            try:
+                font_tuple = self.pdf_doc.extract_font(xref)
+                if not font_tuple:
+                    continue
+                font_data = None
+                if isinstance(font_tuple, dict):
+                    font_data = font_tuple.get("fontfile") or font_tuple.get("stream")
+                elif isinstance(font_tuple, (tuple, list)):
+                    for item in font_tuple:
+                        if isinstance(item, (bytes, bytearray)) and item:
+                            font_data = item
+                            break
+                if not font_data:
+                    continue
+                alias_name = self._allocate_pdf_font_name("font_alias")
+                self.pdf_doc.insert_font(fontname=alias_name, fontbuffer=font_data, subset=False)
+                alias_cache[base_name] = alias_name
+                normalized = self.normalize_pdf_font_name(base_name)
+                if normalized and normalized not in alias_cache:
+                    alias_cache[normalized] = alias_name
+            except Exception:
+                continue
+        self.pdf_font_cache = alias_cache
+        self.register_pdf_fallback_font()
+
+    def ensure_pdf_font_context(self):
+        """确保在交互式脱敏时具备可用的PDF字体上下文"""
+        # 尝试在需要时重新打开PDF，避免pdf_doc为None
+        if not getattr(self, 'pdf_doc', None):
+            pdf_path = getattr(self, 'input_file_path', None)
+            if pdf_path and os.path.exists(pdf_path):
+                try:
+                    self.pdf_doc = fitz.open(pdf_path)
+                except Exception as reopen_err:
+                    print(f"重新打开PDF失败: {reopen_err}")
+                    return False
+            else:
+                return False
+
+        if not getattr(self, 'pdf_font_cache', None):
+            self.pdf_font_cache = {}
+
+        if not self.pdf_font_cache:
+            self.build_pdf_font_cache()
+
+        if not self.pdf_fallback_font_alias:
+            self.register_pdf_fallback_font()
+
+        return True
+
+    def get_pdf_font_alias(self, font_name):
+        """根据原字体名称获取可用于写入的字体别名"""
+        cache = getattr(self, 'pdf_font_cache', {}) or {}
+        candidates = []
+        if font_name:
+            candidates.append(font_name)
+            normalized = self.normalize_pdf_font_name(font_name)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+
+        for name in candidates:
+            if name in cache:
+                alias = cache[name]
+                if font_name and font_name not in cache:
+                    cache[font_name] = alias
+                return alias
+
+        fallback_alias = getattr(self, 'pdf_fallback_font_alias', None)
+        if fallback_alias:
+            return fallback_alias
+
+        registered_alias = self.register_pdf_fallback_font()
+        if registered_alias:
+            return registered_alias
+
+        return "helv"
+
+    def prepare_pdf_redaction_segments(self, start_index, redacted_text):
+        """根据字符索引生成PDF脱敏片段和撤销快照"""
+        if not self.pdf_char_map:
+            return [], []
+
+        end_index = min(start_index + len(redacted_text), len(self.pdf_char_map))
+        segments = []
+        backup_chars = []
+        current_segment = None
+
+        for offset, char_pos in enumerate(range(start_index, end_index)):
+            if char_pos >= len(self.pdf_char_map):
+                break
+            entry = self.pdf_char_map[char_pos]
+            original_char = entry.get('char', '')
+            replacement_char = redacted_text[offset] if offset < len(redacted_text) else original_char
+
+            backup_chars.append({'index': char_pos, 'char': original_char})
+            self.pdf_char_map[char_pos]['char'] = replacement_char
+
+            bbox = entry.get('bbox')
+            if not bbox:
+                continue
+
+            page = entry.get('page', 0)
+            font = entry.get('font', 'helv')
+            size = entry.get('size', 12.0)
+            color = entry.get('color', (0.0, 0.0, 0.0))
+
+            if (not current_segment) or current_segment['page'] != page:
+                if current_segment:
+                    segments.append(current_segment)
+                current_segment = {
+                    'page': page,
+                    'min_x': bbox[0],
+                    'min_y': bbox[1],
+                    'max_x': bbox[2],
+                    'max_y': bbox[3],
+                    'font': font,
+                    'size': size,
+                    'color': color,
+                    'original_chars': [original_char],
+                    'redacted_chars': [replacement_char],
+                    'indices': [char_pos]
+                }
+            else:
+                current_segment['min_x'] = min(current_segment['min_x'], bbox[0])
+                current_segment['min_y'] = min(current_segment['min_y'], bbox[1])
+                current_segment['max_x'] = max(current_segment['max_x'], bbox[2])
+                current_segment['max_y'] = max(current_segment['max_y'], bbox[3])
+                current_segment['original_chars'].append(original_char)
+                current_segment['redacted_chars'].append(replacement_char)
+                current_segment['indices'].append(char_pos)
+
+        if current_segment:
+            segments.append(current_segment)
+
+        formatted_segments = []
+        for seg in segments:
+            formatted_segments.append({
+                'page': seg['page'],
+                'rect': [seg['min_x'], seg['min_y'], seg['max_x'], seg['max_y']],
+                'font': seg['font'],
+                'size': seg['size'],
+                'color': seg['color'],
+                'original': ''.join(seg['original_chars']),
+                'redacted': ''.join(seg['redacted_chars']),
+                'indices': seg['indices']
+            })
+
+        return formatted_segments, backup_chars
+
+    def restore_pdf_characters(self, backups):
+        """根据快照恢复PDF字符映射"""
+        if not backups:
+            return
+
+        for info in backups:
+            index = info.get('index')
+            char_val = info.get('char')
+            if index is None:
+                continue
+            if 0 <= index < len(self.pdf_char_map):
+                self.pdf_char_map[index]['char'] = char_val
+
+    def build_pdf_operations_from_text(self, original_text, updated_text, base_context=None, context_callback=None):
+        """根据原始/更新文本差异构建PDF脱敏操作列表"""
+        if original_text is None or updated_text is None:
+            return []
+
+        if isinstance(base_context, dict):
+            base_context = dict(base_context)
+        else:
+            base_context = {}
+        diff_ranges = self.calculate_text_diff_ranges(original_text, updated_text)
+        operations = []
+
+        for start, end in diff_ranges:
+            original_segment = original_text[start:end]
+            replacement = updated_text[start:end]
+
+            segments, backup = self.prepare_pdf_redaction_segments(start, replacement)
+            if not segments:
+                self.restore_pdf_characters(backup)
+                continue
+
+            end_index = start + len(original_segment)
+            operation = {
+                'start': start,
+                'end': end_index,
+                'original': original_segment,
+                'redacted': replacement,
+                'segments': segments,
+                'char_backup': backup,
+                'timestamp': self.get_current_timestamp()
+            }
+
+            if callable(context_callback):
+                extra_context = context_callback(start, end, original_segment, replacement)
+                if isinstance(extra_context, dict):
+                    operation.update(extra_context)
+
+            if base_context:
+                operation.update(base_context)
+            operations.append(operation)
+
+        if operations:
+            self.pdf_display_text = ''.join(entry.get('char', '') for entry in self.pdf_char_map)
+
+        return operations
+
+    def build_default_mask(self, text):
+        """为给定文本生成与长度一致的默认掩码"""
+        if not text:
+            return text
+
+        length = len(text)
+        if length == 1:
+            return "*"
+        if length == 2:
+            return text[0] + "*"
+        return text[0] + ("*" * (length - 2)) + text[-1]
+
+    def generate_redacted_text(self, original_text):
+        """保留原始空白字符结构的脱敏文本"""
+        if not original_text:
+            return original_text
+
+        match = re.match(r'^(\s*)(.*?)(\s*)$', original_text, re.DOTALL)
+        if not match:
+            return self.smart_redact_text(original_text)
+
+        leading, core, trailing = match.groups()
+        if not core:
+            return original_text
+
+        redacted_core = self.smart_redact_text(core)
+        if (not redacted_core) or len(redacted_core) != len(core):
+            redacted_core = self.build_default_mask(core)
+
+        return f"{leading}{redacted_core}{trailing}"
+
+    def ensure_pdf_text_color(self, color):
+        """确保写入PDF的文本颜色具有足够对比度"""
+        try:
+            if isinstance(color, (list, tuple)) and len(color) >= 3:
+                normalized = tuple(max(0.0, min(1.0, float(c))) for c in color[:3])
+            else:
+                normalized = (0.0, 0.0, 0.0)
+        except Exception:
+            normalized = (0.0, 0.0, 0.0)
+
+        brightness = sum(normalized) / 3.0 if normalized else 0.0
+        if brightness >= 0.85:
+            return (0.0, 0.0, 0.0)
+        return normalized
+
+    def apply_pdf_segment(self, page, segment):
+        """在指定页面应用单个脱敏片段（使用红线脱敏）"""
+        try:
+            rect = fitz.Rect(segment.get('rect', [0, 0, 0, 0]))
+            if rect.is_empty or rect.width == 0 or rect.height == 0:
+                return False
+
+            fontsize = float(segment.get('size', 12.0)) or 12.0
+            text_color = self.ensure_pdf_text_color(segment.get('color', (0.0, 0.0, 0.0)))
+            text = segment.get('redacted', '')
+
+            if not text:
+                original_text = segment.get('original', '')
+                if original_text:
+                    text = self.build_default_mask(original_text)
+                else:
+                    text = "***"
+
+            font_alias = self.get_pdf_font_alias(segment.get('font', 'helv'))
+            if self.pdf_text_requires_ext_font(text) and font_alias == "helv":
+                fallback_alias = self.register_pdf_fallback_font()
+                if fallback_alias:
+                    font_alias = fallback_alias
+
+            page.add_redact_annot(
+                rect,
+                text=text,
+                fill=(1, 1, 1),
+                fontname=font_alias,
+                fontsize=fontsize,
+                text_color=text_color,
+                align=fitz.TEXT_ALIGN_LEFT
+            )
+            return True
+        except Exception as e:
+            print(f"应用PDF片段失败: {e}")
+            return False
+
+    def calculate_text_diff_ranges(self, original_text, updated_text):
+        """计算原文本与更新后文本的差异区间"""
+        ranges = []
+        start = None
+        length = min(len(original_text), len(updated_text))
+
+        for idx in range(length):
+            if original_text[idx] != updated_text[idx]:
+                if start is None:
+                    start = idx
+            else:
+                if start is not None:
+                    ranges.append((start, idx))
+                    start = None
+
+        if start is not None:
+            ranges.append((start, length))
+
+        return ranges
+
+    def auto_redact_pdf(self):
+        """根据当前激活规则自动对PDF文本进行脱敏"""
+        if not self.pdf_char_map:
+            return [], ''
+
+        pdf_text = ''.join(entry.get('char', '') for entry in self.pdf_char_map)
+        operations = []
+
+        for rule in self.rule_engine.get_active_rules():
+            custom_list = None
+            if rule.rule_id == "name_rule":
+                custom_list = getattr(self, 'custom_names', None)
+            elif rule.rule_id == "custom_field_rule":
+                custom_list = getattr(self, 'custom_fields', None)
+
+            processed_text = self.rule_engine.apply_redaction_rule(rule, pdf_text, custom_list)
+            if processed_text == pdf_text:
+                continue
+
+            base_context = {
+                'type': 'auto',
+                'rule_name': rule.name,
+                'mode': '自动规则脱敏',
+                'rule_type': '规则引擎'
+            }
+            rule_operations = self.build_pdf_operations_from_text(pdf_text, processed_text, base_context)
+            if rule_operations:
+                operations.extend(rule_operations)
+
+            pdf_text = processed_text
+
+        self.pdf_display_text = pdf_text
+        return operations, pdf_text
+
+    def is_pdf_image_based(self, pdf_path):
+        """检测PDF是否为图片型（扫描件）"""
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(pdf_path)
+            text_pages = 0
+            total_pages = len(doc)
+            
+            for page_num in range(min(3, total_pages)):  # 检查前3页或全部页面
+                page = doc[page_num]
+                text_content = page.get_text().strip()
+                if text_content:
+                    text_pages += 1
+            
+            doc.close()
+            # 如果前3页都没有文本，认为是图片型PDF
+            return text_pages == 0
+        except Exception as e:
+            print(f"PDF类型检测失败: {e}")
+            return True  # 出错时保守处理，认为是图片型
+
     def closeEvent(self, a0):
         """程序退出时的处理"""
         # 检查是否有自定义规则需要清除
@@ -963,8 +1509,8 @@ class UniversalRedactionTool(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.version = "2.1.5"  # 添加版本号属性
-        self.setWindowTitle("📋通用脱敏工具")
+        self.version = "2.4.1"  # 添加版本号属性
+        self.setWindowTitle("FileMasker")
         self.setWindowIcon(self.get_app_icon())
         self.setGeometry(200, 120, 800, 650)
         self.setup_ui()
@@ -976,14 +1522,22 @@ class UniversalRedactionTool(QMainWindow):
         # 初始化撤销历史记录
         self.text_redaction_history = []  # 文本脱敏历史记录
         self.word_redaction_history = []  # Word文档脱敏历史记录
+        self.pdf_redaction_history = []   # PDF文档脱敏历史记录
         self.excel_redaction_history = []  # Excel脱敏历史记录
         
         # 初始化Excel格式存储
         self.excel_cell_formats = {}  # 存储每个单元格的原始格式信息
         self.original_excel_path = None  # 存储原始Excel文件路径
         
+        # 初始化日志导出相关变量
+        self.current_redaction_log = []  # 当前操作的脱敏日志
+        
         # 自动加载最新的自定义规则
         self.load_latest_custom_names()
+        
+        # 初始化PDF相关状态
+        self.is_pdf_source = False  # 标记当前文件是否来源于PDF
+        self.reset_pdf_state()
 
     def save_cell_format(self, cell, row, col):
         """保存单元格的格式信息"""
@@ -1077,25 +1631,76 @@ class UniversalRedactionTool(QMainWindow):
             print(f"警告：应用单元格({row}, {col})格式失败: {str(e)}")
 
     def get_app_icon(self):
-        # 创建简单图标，避免sRGB配置文件警告
-        pixmap = QPixmap(32, 32)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
-        # 绘制简单的文档图标
-        painter.setBrush(QColor(67, 97, 238))  # 使用RGB值而不是十六进制
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(6, 4, 20, 24, 4, 4)
-        
-        painter.setBrush(QColor(255, 255, 255))
-        painter.drawRect(10, 8, 12, 12)
-        
-        painter.setBrush(QColor(67, 97, 238))
-        painter.drawRect(10, 22, 12, 2)
-        
-        painter.end()
-        return QIcon(pixmap)
+        # 使用更具标识性的自定义徽章图标
+        # create_pen_icon() 使用了 _draw_certificate_pixmap 函数来绘制不同尺寸的设备像素图
+        return create_pen_icon()
+
+    @staticmethod
+    def _hex_to_rgb(hex_color):
+        """Convert hex color string to RGB tuple."""
+        if not hex_color:
+            return 52, 152, 219
+        color = hex_color.strip()
+        if color.startswith("#"):
+            color = color[1:]
+        if len(color) == 3:
+            color = ''.join(ch * 2 for ch in color)
+        try:
+            r = int(color[0:2], 16)
+            g = int(color[2:4], 16)
+            b = int(color[4:6], 16)
+            return r, g, b
+        except (ValueError, IndexError):
+            return 52, 152, 219
+
+    def set_hollow_button(
+        self,
+        button,
+        color="#3498db",
+        *,
+        text_color=None,
+        padding="8px 16px",
+        radius=5,
+        font_size=None,
+        bold=True,
+        min_width=None,
+        hover_alpha=0.14,
+        pressed_alpha=0.24,
+    ):
+        """Apply a consistent hollow button style."""
+        r, g, b = self._hex_to_rgb(color)
+        text_color = text_color or color
+        font_size_line = f"font-size: {font_size};" if font_size else ""
+        font_weight_line = "font-weight: bold;" if bold else ""
+        min_width_line = f"min-width: {min_width};" if min_width else ""
+        hover_bg = f"rgba({r}, {g}, {b}, {hover_alpha:.2f})"
+        pressed_bg = f"rgba({r}, {g}, {b}, {pressed_alpha:.2f})"
+        disabled_color = f"rgba({r}, {g}, {b}, 0.35)"
+        button.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {text_color};
+                border: 2px solid {color};
+                border-radius: {radius}px;
+                padding: {padding};
+                {font_weight_line}
+                {font_size_line}
+                {min_width_line}
+            }}
+            QPushButton:hover {{
+                background-color: {hover_bg};
+            }}
+            QPushButton:pressed {{
+                background-color: {pressed_bg};
+            }}
+            QPushButton:disabled {{
+                color: {disabled_color};
+                border-color: {disabled_color};
+                background-color: transparent;
+            }}
+        """
+        )
 
     def setup_ui(self):
         # 主窗口布局
@@ -1109,7 +1714,7 @@ class UniversalRedactionTool(QMainWindow):
         title_label.setFont(QFont("Arial", 18, QFont.Bold))
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(title_label)
-        version_label = QLabel(f"版本: V2.1.5 | 2025 D&Ai ")
+        version_label = QLabel(f"版本:{self.version} | 2025 D&Ai ")
         version_label.setObjectName("version_label")
         self.version_label = version_label  # 保存为实例变量
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1132,20 +1737,7 @@ class UniversalRedactionTool(QMainWindow):
         self.mode_combo.setCurrentIndex(0)  # 默认选择交互式脱敏
         self.mode_combo.currentIndexChanged.connect(self.on_mode_changed)
         self.rule_config_btn = QPushButton("📋 配置脱敏规则")
-        self.rule_config_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 18px;
-                font-weight: bold;
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(self.rule_config_btn, "#3498db", font_size="16px", padding="10px 20px")
         self.rule_config_btn.clicked.connect(self.show_rule_config_dialog)
         self.rule_config_btn.setVisible(False)  # 初始隐藏
         
@@ -1165,45 +1757,25 @@ class UniversalRedactionTool(QMainWindow):
         file_btn_layout = QHBoxLayout()
         self.input_btn = QPushButton("📂 选择待脱敏文件")
         self.input_btn.setMinimumHeight(40)
-        self.input_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 18px;
-                font-weight: bold;
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(self.input_btn, "#3498db", font_size="16px", padding="10px 20px")
         self.input_btn.clicked.connect(self.select_input_file)
         
-        self.output_btn = QPushButton("💾 设置输出路径") 
+        self.output_btn = QPushButton("💾 设置输出路径")
         self.output_btn.setMinimumHeight(40)
-        self.output_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 18px;
-                font-weight: bold;
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 10px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(self.output_btn, "#3498db", font_size="16px", padding="10px 20px")
         self.output_btn.clicked.connect(self.select_output_path)
         file_btn_layout.addWidget(self.input_btn)
         file_btn_layout.addWidget(self.output_btn)
         file_layout.addLayout(file_btn_layout)
         # 文件信息显示
-        self.file_info_label = QLabel("� 未选择文件")
-        self.file_info_label.setStyleSheet("color: #1E3A8A; font-size: 10pt; padding: 5px; background-color: #f8f9fa; border-radius: 3px;")
+        self.file_info_label = QLabel("📄 未选择文件")
+        self.file_info_label.setStyleSheet(
+            "color: #1E3A8A; "
+            "font-size: 10pt; "
+            "padding: 5px; "
+            "background-color: #f8f9fa; "
+            "border-radius: 3px;"
+        )
         file_layout.addWidget(self.file_info_label)
         # 内容交互区
         self.content_tabs = QTabWidget()
@@ -1229,6 +1801,7 @@ class UniversalRedactionTool(QMainWindow):
         self.text_tab = QWidget()
         self.excel_tab = QWidget()
         self.word_tab = QWidget()
+        self.pdf_tab = QWidget()
 
         # 文本内容交互
         text_layout = QVBoxLayout()
@@ -1245,6 +1818,12 @@ class UniversalRedactionTool(QMainWindow):
         self.text_edit.customContextMenuRequested.connect(self.show_text_context_menu)
 
         text_layout.addWidget(self.text_edit)
+        
+        # 添加清除按钮
+        text_clear_btn = QPushButton("🗑️ 清除内容")
+        self.set_hollow_button(text_clear_btn, "#e74c3c", font_size="14px", padding="6px 12px")
+        text_clear_btn.clicked.connect(lambda: self.text_edit.setPlainText(""))
+        text_layout.addWidget(text_clear_btn, alignment=Qt.AlignmentFlag.AlignRight)
         
         # 初始化文本右键菜单
         self.text_menu = QMenu(self)
@@ -1274,6 +1853,12 @@ class UniversalRedactionTool(QMainWindow):
         excel_layout.addWidget(excel_placeholder)
         excel_layout.addWidget(self.table_widget)
         
+        # 添加清除按钮
+        excel_clear_btn = QPushButton("🗑️ 清除内容")
+        self.set_hollow_button(excel_clear_btn, "#e74c3c", font_size="14px", padding="6px 12px")
+        excel_clear_btn.clicked.connect(self.table_widget.clear)
+        excel_layout.addWidget(excel_clear_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        
         # Word文档内容交互
         word_layout = QVBoxLayout()
         self.word_edit = QTextEdit()
@@ -1289,6 +1874,12 @@ class UniversalRedactionTool(QMainWindow):
         self.word_edit.customContextMenuRequested.connect(self.show_word_context_menu)
         
         word_layout.addWidget(self.word_edit)
+        
+        # 添加清除按钮
+        word_clear_btn = QPushButton("🗑️ 清除内容")
+        self.set_hollow_button(word_clear_btn, "#e74c3c", font_size="14px", padding="6px 12px")
+        word_clear_btn.clicked.connect(lambda: self.word_edit.setPlainText(""))
+        word_layout.addWidget(word_clear_btn, alignment=Qt.AlignmentFlag.AlignRight)
         
         # 初始化Word右键菜单
         self.word_menu = QMenu(self)
@@ -1308,10 +1899,50 @@ class UniversalRedactionTool(QMainWindow):
         
         # 区域撤销功能已移除，仅保留单步撤销
         
+        # PDF文档内容交互
+        pdf_layout = QVBoxLayout()
+        self.pdf_edit = QTextEdit()
+        self.pdf_edit.setReadOnly(False)  # 允许编辑以支持交互式脱敏
+        # PDF标签页的提示信息
+        pdf_placeholder = QLabel("📄 选择PDF文档后，内容将在此显示\n💡 使用技巧：\n• 选中需要脱敏的文字后右键选择脱敏方式\n• 支持局部脱敏和全文同内容脱敏\n• PDF处理")
+        pdf_placeholder.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        pdf_placeholder.setStyleSheet("color: #2563EB; font-size: 9pt; background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 4px; padding: 10px;")
+        pdf_layout.addWidget(pdf_placeholder)
+        
+        # 添加PDF文档选择上下文菜单
+        self.pdf_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.pdf_edit.customContextMenuRequested.connect(self.show_pdf_context_menu)
+        
+        pdf_layout.addWidget(self.pdf_edit)
+        
+        # 添加清除按钮
+        pdf_clear_btn = QPushButton("🗑️ 清除内容")
+        self.set_hollow_button(pdf_clear_btn, "#e74c3c", font_size="14px", padding="6px 12px")
+        pdf_clear_btn.clicked.connect(lambda: self.pdf_edit.setPlainText(""))
+        pdf_layout.addWidget(pdf_clear_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        
+        # 初始化PDF右键菜单
+        self.pdf_menu = QMenu(self)
+        self.pdf_redact_action = QAction("🎯 标记脱敏（仅选中部分）", self)
+        self.pdf_redact_action.triggered.connect(self.mark_pdf_redaction)
+        self.pdf_menu.addAction(self.pdf_redact_action)
+        
+        self.pdf_redact_all_action = QAction("🔄 标记脱敏（全文相同内容）", self)
+        self.pdf_redact_all_action.triggered.connect(self.mark_pdf_redaction_all)
+        self.pdf_menu.addAction(self.pdf_redact_all_action)
+        
+        # 添加撤销脱敏功能
+        self.pdf_menu.addSeparator()
+        self.pdf_undo_action = QAction("↩️ 撤销脱敏", self)
+        self.pdf_undo_action.triggered.connect(self.undo_pdf_redaction)
+        self.pdf_menu.addAction(self.pdf_undo_action)
+        
         self.text_tab.setLayout(text_layout)
         self.excel_tab.setLayout(excel_layout)
         self.word_tab.setLayout(word_layout)
+        self.pdf_tab.setLayout(pdf_layout)
         self.content_tabs.addTab(self.word_tab, "📝 Word文档")
+        self.content_tabs.addTab(self.pdf_tab, "📄 PDF文档")
         self.content_tabs.addTab(self.excel_tab, "📊 Excel内容")
         self.content_tabs.addTab(self.text_tab, "📄 文本内容")
         file_layout.addWidget(self.content_tabs)
@@ -1326,55 +1957,16 @@ class UniversalRedactionTool(QMainWindow):
         action_btn_layout = QHBoxLayout()
         self.process_btn = QPushButton("🚀 开始脱敏")
         self.process_btn.setMinimumHeight(50)
-        self.process_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 20px;
-                font-weight: bold;
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 15px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(self.process_btn, "#3498db", font_size="17px", padding="12px 24px", radius=8)
         
         self.batch_btn = QPushButton("📦 批量处理")
         self.batch_btn.setMinimumHeight(50)
-        self.batch_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 20px;
-                font-weight: bold;
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 15px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(self.batch_btn, "#3498db", font_size="17px", padding="12px 24px", radius=8)
         self.batch_btn.setVisible(False)  # 初始隐藏，只在自动规则模式下显示
         
         self.help_btn = QPushButton("❓ 帮助")
         self.help_btn.setMinimumHeight(50)
-        self.help_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 20px;
-                font-weight: bold;
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 15px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-            }
-        """)
+        self.set_hollow_button(self.help_btn, "#3498db", font_size="17px", padding="12px 24px", radius=8)
         
         action_btn_layout.addWidget(self.process_btn)
         action_btn_layout.addWidget(self.batch_btn)
@@ -1421,6 +2013,12 @@ class UniversalRedactionTool(QMainWindow):
     def show_help(self):
         # 更新记录（简洁版，每条一句话，保留日期）
         update_records = [
+            "2025-11-28 V2.4.1：修复word导出错误；新增预览区清除内容按钮，优化用户体验",
+            "2025-11-23 V2.4.0：新增自定义规则生成器，支持快速创建个性化脱敏规则",
+            "2025-11-06 V2.3.1：修改按钮样式",
+            "2025-10-07 V2.3.0：新增PDF脱敏功能，支持文本型PDF脱敏",
+            "2025-08-28 V2.2.1：修复日志导出错误",
+            "2025-08-22 V2.2.0：增加日志导出功能",
             "2025-08-11 V2.1.5：增加Excel区域撤销功能，提升一致性和稳定性。",
             "2025-08-11 V2.1.4：Excel批量脱敏和全表查找替换功能增强。",
             "2025-08-11 V2.1.3：新增检查更新功能，支持自动获取最新版本",
@@ -1437,11 +2035,9 @@ class UniversalRedactionTool(QMainWindow):
         【免责声明】本软件为免费工具，用户自愿使用。开发者不承诺软件绝对安全，对因使用软件导致的数据丢失、系统损坏等后果不承担责任。禁止将软件用于非法目的。
         </div>
 
-    <h2 style='text-align:center; font-size:28px; margin-bottom:18px;'>通用脱敏工具 V2.1.5 使用说明</h2>
-
-        <h3 style='color:#2980b9; font-size:25px;'>基本功能</h3>
+        <h2 style='text-align:center; font-size:28px; margin-bottom:18px;'>通用脱敏工具 V{self.version} 使用说明</h2>        <h3 style='color:#2980b9; font-size:25px;'>基本功能</h3>
         <ul style='font-size:18px;'>
-            <li>支持 TXT文本、Excel表格、Word文档三种格式的敏感信息脱敏处理</li>
+            <li>支持 TXT文本、Excel表格、Word文档、PDF文档四种格式的敏感信息脱敏处理</li>
             <li>交互式脱敏：选中文本或单元格，右键标记，精确控制每个内容</li>
             <li>自动脱敏（规则模式）：配置规则后可一键批量处理文件夹或多文件</li>
         </ul>
@@ -1451,7 +2047,8 @@ class UniversalRedactionTool(QMainWindow):
             <li>右键快速标记，支持全文同步脱敏</li>
             <li>Excel支持单元格、整行、整列精确脱敏</li>
             <li>自定义规则每日自动保存，支持批量导入/导出</li>
-            <li>内置13种脱敏规则，涵盖生活工作多方面需求</li>
+            <li>内置十余种脱敏规则，涵盖生活工作多方面需求</li>
+            <li>提供英文脱敏规则文件，可直接导入使用</li>
         </ul>
 
         <h3 style='color:#2980b9; font-size:25px;'>操作步骤</h3>
@@ -1479,7 +2076,7 @@ class UniversalRedactionTool(QMainWindow):
         </div>
 
         <p style='text-align:center; margin-top:18px; font-size:20px;'>
-        <b>版本 V2.1.5</b> | 2025 D&Ai <br>
+        <b>版本 V{self.version}</b> 基于 Apache License 2.0 | 2025 D&Ai <br>
         <b>更多功能请在使用中探索发现 😊</b>
         </p>
         </div>
@@ -1499,23 +2096,7 @@ class UniversalRedactionTool(QMainWindow):
         top_layout.addStretch()  # 左侧弹簧
         
         check_update_btn = QPushButton("检查更新")
-        check_update_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4a90e2;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                font-size: 14px;
-                border-radius: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #357abd;
-            }
-            QPushButton:pressed {
-                background-color: #2968a3;
-            }
-        """)
+        self.set_hollow_button(check_update_btn, "#4a90e2", font_size="14px", padding="8px 20px")
         check_update_btn.clicked.connect(self.check_update)
         top_layout.addWidget(check_update_btn)
         
@@ -1554,24 +2135,31 @@ class UniversalRedactionTool(QMainWindow):
 
     def add_rule(self):
         """添加新规则"""
-        rule_text = self.rule_edit.toPlainText().strip()
-        if not rule_text:
-            QMessageBox.warning(self, "警告", "请输入规则内容")
-            return
-        
         try:
-            # 简单示例：实际应解析JSON格式规则
+            rule_data = self.build_custom_rule_data()
+        except ValueError as err:
+            QMessageBox.warning(self, "提示", str(err))
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"生成规则失败: {str(exc)}")
+            return
+
+        try:
             new_rule = RedactionRule(
-                rule_id=f"rule_{len(self.rule_engine.rules)+1}",
-                name="自定义规则",
-                pattern=rule_text,
-                example=f"示例: 应用 {rule_text}"
+                rule_id=rule_data["rule_id"],
+                name=rule_data["name"],
+                pattern=rule_data["pattern"],
+                example=rule_data["example_display"],
+                regex=rule_data["pattern"],
+                marker_char="*",
+                is_active=True,
             )
             self.rule_engine.add_rule(new_rule)
             self.update_rule_list()
-            self.rule_edit.clear()
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"添加规则失败: {str(e)}")
+            QMessageBox.information(self, "成功", f"已添加规则：{new_rule.name}")
+            self.refresh_custom_rule_preview()
+        except Exception as exc:
+            QMessageBox.critical(self, "错误", f"添加规则失败: {str(exc)}")
 
     def clear_rules(self):
         """清空所有规则"""
@@ -1753,21 +2341,19 @@ class UniversalRedactionTool(QMainWindow):
                 
                 # 激活/禁用按钮
                 toggle_btn = QPushButton()
-                if selected_rule.is_active:
-                    toggle_btn.setText("🔴 禁用规则")
-                    toggle_btn.setStyleSheet("background-color: #ff6b6b; color: white; font-weight: bold;")
-                else:
-                    toggle_btn.setText("🟢 激活规则")
-                    toggle_btn.setStyleSheet("background-color: #51cf66; color: white; font-weight: bold;")
-                
+                def apply_toggle_style():
+                    if selected_rule.is_active:
+                        toggle_btn.setText("禁用规则")
+                        self.set_hollow_button(toggle_btn, "#ff6b6b", padding="6px 12px")
+                    else:
+                        toggle_btn.setText("激活规则")
+                        self.set_hollow_button(toggle_btn, "#51cf66", padding="6px 12px")
+
+                apply_toggle_style()
+
                 def toggle_rule_status():
                     selected_rule.is_active = not selected_rule.is_active
-                    if selected_rule.is_active:
-                        toggle_btn.setText("🔴 禁用规则")
-                        toggle_btn.setStyleSheet("background-color: #ff6b6b; color: white; font-weight: bold;")
-                    else:
-                        toggle_btn.setText("🟢 激活规则")
-                        toggle_btn.setStyleSheet("background-color: #51cf66; color: white; font-weight: bold;")
+                    apply_toggle_style()
                 
                 toggle_btn.clicked.connect(toggle_rule_status)
                 status_layout.addWidget(toggle_btn)
@@ -1837,10 +2423,10 @@ class UniversalRedactionTool(QMainWindow):
                     result_text.setPlainText("请输入测试文本")
                     return
                     
-                # 使用与交互脱敏相同的智能脱敏逻辑
+                # 使用与交互脱敏相同的内置算法
                 try:
                     import re
-                    # 使用规则引擎的模式匹配，但结合智能脱敏逻辑
+                    # 使用规则引擎的模式匹配，但结合内置算法
                     # 使用 re.finditer 来获取完整匹配，避免分组问题
                     matches = []
                     for match_obj in re.finditer(rule.pattern, test_text):
@@ -1853,7 +2439,7 @@ class UniversalRedactionTool(QMainWindow):
                         result = test_text
                         matches_found = True
                         for match in matches:
-                            # 使用smart_redact_text的智能脱敏逻辑
+                            # 使用smart_redact_text的内置算法
                             redacted = self.smart_redact_text(match)
                             result = result.replace(match, redacted)
                     
@@ -1894,7 +2480,7 @@ class UniversalRedactionTool(QMainWindow):
             except UnicodeDecodeError:
                 continue
             except Exception as e:
-                self.status_label.setText(f"读取文件时发生错误: {str(e)}")
+                self.status_label.setText(f"读取文件时发生错误：{str(e)}")
                 continue
         
         return None
@@ -1963,69 +2549,174 @@ class UniversalRedactionTool(QMainWindow):
             # 如果是姓名规则，在后面加自定义按钮
             if rule.name == "姓名":
                 name_btn = QPushButton("自定义名单")
-                name_btn.setStyleSheet("""
-                    QPushButton {
-                        font-size: 12px;
-                        font-weight: bold;
-                        background-color: #3498db;
-                        color: white;
-                        border: none;
-                        border-radius: 5px;
-                        padding: 6px 12px;
-                        margin-left: 10px;
-                    }
-                    QPushButton:hover {
-                        background-color: #2980b9;
-                    }
-                """)
+                self.set_hollow_button(name_btn, "#3498db", font_size="12px", padding="6px 12px")
                 name_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 name_btn.clicked.connect(self.show_name_redact_dialog)
+                row_layout.addSpacing(10)
                 row_layout.addWidget(name_btn)
             # 如果是自定义字段规则，在后面加自定义按钮
             elif rule.name == "自定义字段":
                 field_btn = QPushButton("自定义字段")
-                field_btn.setStyleSheet("""
-                    QPushButton {
-                        font-size: 12px;
-                        font-weight: bold;
-                        background-color: #e67e22;
-                        color: white;
-                        border: none;
-                        border-radius: 5px;
-                        padding: 6px 12px;
-                        margin-left: 10px;
-                    }
-                    QPushButton:hover {
-                        background-color: #d35400;
-                    }
-                """)
+                self.set_hollow_button(field_btn, "#e67e22", font_size="12px", padding="6px 12px")
                 field_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 field_btn.clicked.connect(self.show_custom_field_redact_dialog)
+                row_layout.addSpacing(10)
                 row_layout.addWidget(field_btn)
             rules_layout.addLayout(row_layout)
         rules_group.setLayout(rules_layout)
         layout.addWidget(rules_group)
 
-        # 规则编辑区（保留原有功能）
-        self.rule_edit = QTextEdit()
-        placeholder_text = """请输入脱敏规则(JSON格式)...\n\n📝 使用步骤提示：\n第1步：确定需要脱敏的敏感信息类型（如：姓名、电话、身份证等）\n第2步：为每个类型编写匹配规则（支持正则表达式）\n第3步：设置替换方式（如：张三 → 张XX，13812345678 → 138****5678）\n\n💡 示例格式：\n[\n    {\n        \"name\": \"姓名脱敏\",\n        \"pattern\": \"张三|李四|王五\",\n        \"replacement\": \"***\",\n        \"is_regex\": false\n    },\n    {\n        \"name\": \"手机号脱敏\", \n        \"pattern\": \"1[3-9]\\\\d{9}\",\n        \"replacement\": \"***\",\n        \"is_regex\": true\n    }\n]\n\n💭 小贴士：可以使用下方按钮导入已有规则文件或使用预览功能测试效果"""
-        self.rule_edit.setPlaceholderText(placeholder_text)
-        layout.addWidget(QLabel("高级规则编辑区:"))
-        layout.addWidget(self.rule_edit)
+        # 自定义规则生成器（表单+实时预览）
+        custom_group = QGroupBox("自定义规则生成器")
+        custom_layout = QVBoxLayout()
+
+        form_layout = QFormLayout()
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        self.custom_field_name_input = QLineEdit()
+        self.custom_field_name_input.setPlaceholderText("例如：客户姓名")
+        self.custom_field_name_input.setText("客户姓名")
+        self.custom_field_name_input.setToolTip("填写这条自定义规则的名称，便于在规则列表中识别，例如“客户姓名”或“培训时长”。")
+        form_layout.addRow("字段名称：", self.custom_field_name_input)
+
+        self.custom_match_type_combo = QComboBox()
+        match_items = [
+            ("完全自定义", "custom"),
+            ("仅字母", "alpha"),
+            ("仅数字", "digit"),
+            ("字母+数字", "alnum"),
+            ("仅汉字", "han"),
+            ("字母数字汉字", "mixed"),
+        ]
+        for label_text, value in match_items:
+            self.custom_match_type_combo.addItem(label_text, userData=value)
+        self.custom_match_type_combo.setCurrentIndex(4)
+        self.custom_match_type_combo.setToolTip("选择待匹配文本的大致字符类型。若要指定更复杂的范围，请选择“完全自定义”。")
+        form_layout.addRow("匹配方式：", self.custom_match_type_combo)
+
+        self.custom_charset_label = QLabel("自定义字符集：")
+        self.custom_charset_input = QLineEdit()
+        self.custom_charset_input.setPlaceholderText("请输入字符集合，例如：A-Za-z0-9")
+        self.custom_charset_input.setToolTip("仅在选择“完全自定义”时需要填写。支持连字符区间（如A-Z）或直接列出允许的字符，也可包含\\u4e00-\\u9fa5。")
+        form_layout.addRow(self.custom_charset_label, self.custom_charset_input)
+        self.custom_charset_label.setVisible(False)
+        self.custom_charset_input.setVisible(False)
+
+        self.custom_min_length_spin = QSpinBox()
+        self.custom_min_length_spin.setRange(1, 100)
+        self.custom_min_length_spin.setValue(2)
+        self.custom_min_length_spin.setToolTip("匹配文本的最小长度。数字或字符个数不足该值将不会命中规则。")
+        form_layout.addRow("最小长度：", self.custom_min_length_spin)
+
+        self.custom_max_length_spin = QSpinBox()
+        self.custom_max_length_spin.setRange(1, 100)
+        self.custom_max_length_spin.setValue(10)
+        self.custom_max_length_spin.setToolTip("匹配文本的最大长度。可与最小值相同以限定固定长度。")
+        form_layout.addRow("最大长度：", self.custom_max_length_spin)
+
+        self.custom_separator_input = QLineEdit()
+        self.custom_separator_input.setPlaceholderText("例如：空格 / . / - / \\n")
+        self.custom_separator_input.setToolTip("若需要多段内容（如身份证格式的分段），在此指定段与段之间的分隔符。支持输入\\n、\\t代表换行和制表符。")
+        form_layout.addRow("分隔符：", self.custom_separator_input)
+
+        self.custom_parts_spin = QSpinBox()
+        self.custom_parts_spin.setRange(1, 5)
+        self.custom_parts_spin.setValue(1)
+        self.custom_parts_spin.setToolTip("设置需要匹配的段数。例如银行卡可分成多段；若仅匹配一段文本，请保持为1。")
+        form_layout.addRow("段数：", self.custom_parts_spin)
+
+        self.custom_template_combo = QComboBox()
+        template_items = [
+            ("首字母+星号", "first_asterisk"),
+            ("全部星号", "all_asterisk"),
+            ("保留前3位", "keep_3"),
+            ("保留头尾", "keep_head_tail"),
+        ]
+        for label_text, value in template_items:
+            self.custom_template_combo.addItem(label_text, userData=value)
+        self.custom_template_combo.setToolTip("选择匹配到的数据在脱敏后的展示方式。不同模板会保留不同的关键信息。")
+        form_layout.addRow("脱敏模板：", self.custom_template_combo)
+
+        custom_layout.addLayout(form_layout)
+
+        helper_layout = QHBoxLayout()
+        helper_layout.addStretch()
+        preview_button = QPushButton("刷新预览")
+        self.set_hollow_button(preview_button, "#27ae60", font_size="12px", padding="6px 16px")
+        helper_layout.addWidget(preview_button)
+        copy_button = QPushButton("复制 JSON")
+        self.set_hollow_button(copy_button, "#4a90e2", font_size="12px", padding="6px 16px")
+        helper_layout.addWidget(copy_button)
+        helper_layout.addStretch()
+        custom_layout.addLayout(helper_layout)
+
+        preview_group = QGroupBox("实时预览")
+        preview_layout = QVBoxLayout()
+
+        self.custom_regex_preview = QLabel("/")
+        self.custom_regex_preview.setWordWrap(True)
+        self.custom_regex_preview.setStyleSheet("color: #27ae60; font-family: Consolas, 'Courier New', monospace;")
+        preview_layout.addWidget(QLabel("正则表达式："))
+        preview_layout.addWidget(self.custom_regex_preview)
+
+        self.custom_example_preview = QLabel("示例预览将在此显示")
+        self.custom_example_preview.setWordWrap(True)
+        preview_layout.addWidget(QLabel("示例："))
+        preview_layout.addWidget(self.custom_example_preview)
+
+        self.custom_json_preview = QTextEdit()
+        self.custom_json_preview.setReadOnly(True)
+        self.custom_json_preview.setMinimumHeight(140)
+        self.custom_json_preview.setStyleSheet("font-family: Consolas, 'Courier New', monospace;")
+        preview_layout.addWidget(QLabel("JSON："))
+        preview_layout.addWidget(self.custom_json_preview)
+
+        preview_group.setLayout(preview_layout)
+        custom_layout.addWidget(preview_group)
+
+        custom_group.setLayout(custom_layout)
+        layout.addWidget(custom_group)
+
+        def handle_match_type_change(index: int) -> None:
+            value = self.custom_match_type_combo.itemData(index)
+            is_custom = value == "custom"
+            self.custom_charset_label.setVisible(is_custom)
+            self.custom_charset_input.setVisible(is_custom)
+            if not is_custom:
+                self.custom_charset_input.clear()
+            self.refresh_custom_rule_preview()
+
+        self.custom_match_type_combo.currentIndexChanged.connect(handle_match_type_change)
+        self.custom_field_name_input.textChanged.connect(self.refresh_custom_rule_preview)
+        self.custom_charset_input.textChanged.connect(self.refresh_custom_rule_preview)
+        self.custom_min_length_spin.valueChanged.connect(self.refresh_custom_rule_preview)
+        self.custom_max_length_spin.valueChanged.connect(self.refresh_custom_rule_preview)
+        self.custom_separator_input.textChanged.connect(self.refresh_custom_rule_preview)
+        self.custom_parts_spin.valueChanged.connect(self.refresh_custom_rule_preview)
+        self.custom_template_combo.currentIndexChanged.connect(self.refresh_custom_rule_preview)
+        preview_button.clicked.connect(self.refresh_custom_rule_preview)
+        copy_button.clicked.connect(self.copy_custom_rule_json)
+        handle_match_type_change(self.custom_match_type_combo.currentIndex())
 
         # 规则操作按钮（保留原有功能）
         rule_btn_layout = QHBoxLayout()
-        add_btn = QPushButton("➕ 添加规则")
+        add_btn = QPushButton("添加规则")
+        self.set_hollow_button(add_btn, "#3498db", font_size="14px", padding="8px 18px")
         add_btn.clicked.connect(self.add_rule)
-        import_btn = QPushButton("📥 导入规则")
+        import_btn = QPushButton("导入规则")
+        self.set_hollow_button(import_btn, "#3498db", font_size="14px", padding="8px 18px")
         import_btn.clicked.connect(self.import_rules)
-        export_btn = QPushButton("📤 导出规则")
+        export_btn = QPushButton("导出规则")
+        self.set_hollow_button(export_btn, "#3498db", font_size="14px", padding="8px 18px")
         export_btn.clicked.connect(self.export_rules)
-        edit_btn = QPushButton("✏️ 编辑规则")
+        edit_btn = QPushButton("编辑规则")
+        self.set_hollow_button(edit_btn, "#3498db", font_size="14px", padding="8px 18px")
         edit_btn.clicked.connect(self.edit_rule)
-        preview_btn = QPushButton("👁️ 预览规则")
+        preview_btn = QPushButton("预览规则")
+        self.set_hollow_button(preview_btn, "#9b59b6", font_size="14px", padding="8px 18px")
         preview_btn.clicked.connect(self.preview_rule)
-        clear_btn = QPushButton("🗑️ 清空规则")
+        clear_btn = QPushButton("清空规则")
+        self.set_hollow_button(clear_btn, "#e74c3c", font_size="14px", padding="8px 18px")
         clear_btn.clicked.connect(self.clear_rules)
         rule_btn_layout.addWidget(add_btn)
         rule_btn_layout.addWidget(import_btn)
@@ -2039,39 +2730,25 @@ class UniversalRedactionTool(QMainWindow):
         dialog_btn_layout = QHBoxLayout()
         dialog_btn_layout.addStretch()
         
-        ok_btn = QPushButton("✅ 继续")
-        ok_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 15px 30px;
-                font-size: 18px;
-                font-weight: bold;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #229954;
-            }
-        """)
+        ok_btn = QPushButton("继续")
+        self.set_hollow_button(
+            ok_btn,
+            "#27ae60",
+            font_size="16px",
+            padding="12px 24px",
+            radius=8,
+            min_width="100px",
+        )
         
-        cancel_btn = QPushButton("❌ 取消")
-        cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 15px 30px;
-                font-size: 18px;
-                font-weight: bold;
-                min-width: 100px;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-        """)
+        cancel_btn = QPushButton("取消")
+        self.set_hollow_button(
+            cancel_btn,
+            "#e74c3c",
+            font_size="16px",
+            padding="12px 24px",
+            radius=8,
+            min_width="100px",
+        )
         
         dialog_btn_layout.addWidget(ok_btn)
         dialog_btn_layout.addWidget(cancel_btn)
@@ -2091,6 +2768,221 @@ class UniversalRedactionTool(QMainWindow):
 
         dialog.setLayout(layout)
         dialog.exec_()
+
+    def build_custom_rule_data(self, preview_only: bool = False) -> dict:
+        """根据表单输入生成规则配置与预览数据"""
+        if not hasattr(self, "custom_field_name_input"):
+            raise ValueError("自定义规则控件尚未初始化")
+
+        field_name = self.custom_field_name_input.text().strip()
+        if not field_name:
+            raise ValueError("请填写字段名称")
+
+        match_type = self.custom_match_type_combo.currentData() or "custom"
+        min_length = self.custom_min_length_spin.value()
+        max_length = self.custom_max_length_spin.value()
+        if min_length > max_length:
+            raise ValueError("最小长度不能大于最大长度")
+
+        parts = self.custom_parts_spin.value()
+        separator_raw = self.custom_separator_input.text()
+        separator_processed = separator_raw.replace("\\n", "\n").replace("\\t", "\t")
+
+        pattern_map = {
+            "alpha": "A-Za-z",
+            "digit": "0-9",
+            "alnum": "A-Za-z0-9",
+            "han": "\\u4e00-\\u9fa5",
+            "mixed": "A-Za-z0-9\\u4e00-\\u9fa5",
+        }
+
+        if match_type == "custom":
+            custom_charset = re.sub(r"\s+", "", self.custom_charset_input.text())
+            if not custom_charset:
+                raise ValueError("请填写自定义字符集")
+            pattern_charset = custom_charset.replace("[", "").replace("]", "")
+        else:
+            pattern_charset = pattern_map.get(match_type, "A-Za-z0-9")
+
+        pattern_charset = re.sub(r"\s+", "", pattern_charset)
+        if not pattern_charset:
+            raise ValueError("字符集不能为空")
+
+        segment = f"[{pattern_charset}]{{{min_length},{max_length}}}"
+        if separator_processed:
+            if separator_raw == "\\n":
+                separator_pattern = r"\n"
+            elif separator_raw == "\\t":
+                separator_pattern = r"\t"
+            else:
+                separator_pattern = re.escape(separator_processed)
+        else:
+            separator_pattern = ""
+
+        if parts == 1:
+            pattern = segment
+        else:
+            if separator_pattern:
+                pattern = f"{segment}(?:{separator_pattern}{segment}){{{parts-1}}}"
+            else:
+                pattern = f"{segment}(?:{segment}){{{parts-1}}}"
+
+        pool_source = pattern_charset if match_type != "custom" else self.custom_charset_input.text()
+        char_pool = self._build_char_pool(match_type, pool_source)
+        example_text = self._generate_custom_example(char_pool, parts, min_length, max_length, separator_processed)
+        template_value = self.custom_template_combo.currentData() or "first_asterisk"
+        masked_example = self._apply_mask_template(example_text, template_value)
+
+        rule_id = "rule_preview" if preview_only else f"custom_{int(time.time())}_{random.randint(1000, 9999)}"
+
+        return {
+            "rule_id": rule_id,
+            "name": field_name,
+            "pattern": pattern,
+            "regex_display": f"/{pattern}/",
+            "example_display": f"{example_text} → {masked_example}",
+            "payload": {
+                "rule_id": rule_id,
+                "name": field_name,
+                "pattern": pattern,
+                "example": f"{example_text} → {masked_example}",
+                "regex": pattern,
+                "marker_char": "*",
+                "template": template_value,
+                "is_active": True,
+                "metadata": {
+                    "match_type": match_type,
+                    "min_length": min_length,
+                    "max_length": max_length,
+                    "parts": parts,
+                    "separator": separator_raw,
+                },
+            },
+            "json": json.dumps(
+                {
+                    "rule_id": rule_id,
+                    "name": field_name,
+                    "pattern": pattern,
+                    "example": f"{example_text} → {masked_example}",
+                    "regex": pattern,
+                    "marker_char": "*",
+                    "template": template_value,
+                    "is_active": True,
+                    "metadata": {
+                        "match_type": match_type,
+                        "min_length": min_length,
+                        "max_length": max_length,
+                        "parts": parts,
+                        "separator": separator_raw,
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        }
+
+    def _build_char_pool(self, match_type: str, charset: str) -> str:
+        """构建示例所需的字符集合"""
+        base_map = {
+            "alpha": string.ascii_letters,
+            "digit": string.digits,
+            "alnum": string.ascii_letters + string.digits,
+            "han": "张王李赵刘陈杨黄周吴徐孙胡郭林何高马罗梁宋郑谢韩唐冯许曹",
+            "mixed": string.ascii_letters + string.digits + "张王李赵刘陈杨黄周吴徐孙胡郭林何高马罗梁宋郑谢韩唐冯许曹",
+        }
+
+        if match_type in base_map:
+            pool = base_map[match_type]
+        else:
+            pool = ""
+            charset_clean = re.sub(r"\s+", "", charset or "")
+            charset_clean = charset_clean.replace("[", "").replace("]", "")
+
+            if "\\u4e00-\\u9fa5" in charset_clean:
+                pool += "张王李赵刘陈杨黄周吴徐孙胡郭林何高马罗梁宋郑谢韩唐冯许曹"
+                charset_clean = charset_clean.replace("\\u4e00-\\u9fa5", "")
+
+            for start, end in re.findall(r"([A-Za-z0-9])\-([A-Za-z0-9])", charset_clean):
+                if ord(start) <= ord(end):
+                    for code in range(ord(start), ord(end) + 1):
+                        pool += chr(code)
+                charset_clean = charset_clean.replace(f"{start}-{end}", "")
+
+            charset_clean = charset_clean.replace("\\", "")
+            pool += charset_clean
+
+        unique_pool = "".join(dict.fromkeys(pool))
+        return unique_pool or (string.ascii_letters + string.digits)
+
+    def _generate_custom_example(self, pool: str, parts: int, min_length: int, max_length: int, separator: str) -> str:
+        """生成示例文本"""
+        if not pool:
+            raise ValueError("字符集为空，无法生成示例")
+
+        segments = []
+        for _ in range(parts):
+            length = max(random.randint(min_length, max_length), 1)
+            segment = ''.join(random.choice(pool) for _ in range(length))
+            segments.append(segment)
+
+        if separator:
+            return separator.join(segments)
+        return ''.join(segments)
+
+    def _apply_mask_template(self, text: str, template: str) -> str:
+        """根据模板生成脱敏示例"""
+        if not text:
+            return ""
+
+        if template == "all_asterisk":
+            return "*" * len(text)
+        if template == "keep_3":
+            return text[:3] + "*" * max(len(text) - 3, 0) if len(text) > 3 else "*" * len(text)
+        if template == "keep_head_tail":
+            if len(text) <= 2:
+                return "*" * len(text)
+            return text[0] + "*" * (len(text) - 2) + text[-1]
+
+        parts = re.split(r"(\s+)", text)
+        masked_parts = []
+        for part in parts:
+            if not part or part.isspace():
+                masked_parts.append(part)
+            else:
+                masked_parts.append(part[0] + "*" * max(len(part) - 1, 0))
+        return ''.join(masked_parts)
+
+    def refresh_custom_rule_preview(self) -> None:
+        """刷新右侧预览"""
+        if not hasattr(self, "custom_regex_preview"):
+            return
+        try:
+            preview = self.build_custom_rule_data(preview_only=True)
+        except ValueError as err:
+            self.custom_regex_preview.setText(str(err))
+            self.custom_example_preview.setText("—")
+            self.custom_json_preview.setPlainText("")
+            return
+        except Exception as exc:
+            self.custom_regex_preview.setText(str(exc))
+            self.custom_example_preview.setText("—")
+            self.custom_json_preview.setPlainText("")
+            return
+
+        self.custom_regex_preview.setText(preview["regex_display"])
+        self.custom_example_preview.setText(preview["example_display"])
+        self.custom_json_preview.setPlainText(preview["json"])
+
+    def copy_custom_rule_json(self) -> None:
+        """复制预览中的JSON"""
+        if not hasattr(self, "custom_json_preview"):
+            return
+        json_text = self.custom_json_preview.toPlainText().strip()
+        if not json_text:
+            QMessageBox.information(self, "提示", "当前没有可复制的JSON内容")
+            return
+        QApplication.clipboard().setText(json_text)
+        QMessageBox.information(self, "成功", "JSON内容已复制到剪贴板")
 
     def sanitize_excel_value(self, value):
         """清理Excel单元格值，避免特殊字符问题"""
@@ -2119,14 +3011,17 @@ class UniversalRedactionTool(QMainWindow):
         if current_tab == 0:  # Word标签页
             file_filter = "Word文档 (*.docx *.doc);;Word 2007及以上 (*.docx);;Word 97-2003 (*.doc);;所有文件 (*)"
             dialog_title = "选择Word文档"
-        elif current_tab == 1:  # Excel标签页
+        elif current_tab == 1:  # PDF标签页
+            file_filter = "PDF文档 (*.pdf);;所有文件 (*)"
+            dialog_title = "选择PDF文件"
+        elif current_tab == 2:  # Excel标签页
             file_filter = "Excel文件 (*.xlsx);;所有文件 (*)"
             dialog_title = "选择Excel文件"
-        elif current_tab == 2:  # 文本标签页
+        elif current_tab == 3:  # 文本标签页
             file_filter = "文本文件 (*.txt);;所有文件 (*)"
             dialog_title = "选择文本文件"
         else:
-            file_filter = "Word文档 (*.docx *.doc);;Excel文件 (*.xlsx);;文本文件 (*.txt);;所有文件 (*)"
+            file_filter = "Word文档 (*.docx *.doc);;PDF文档 (*.pdf);;Excel文件 (*.xlsx);;文本文件 (*.txt);;所有文件 (*)"
             dialog_title = "选择输入文件"
             
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2161,7 +3056,7 @@ class UniversalRedactionTool(QMainWindow):
                             # 保存工作簿信息以便后续保存
                             self.current_workbook = wb
                             self.current_sheet_name = wb.active.title
-                            self.original_excel_path = file_path  # 保存原始文件路径
+                            self.original_excel_path = file_path  # 保存原始Excel文件路径
                             
                             ws = wb.active
                             
@@ -2200,6 +3095,48 @@ class UniversalRedactionTool(QMainWindow):
                             QMessageBox.warning(self, "警告", "Excel文件中没有活动工作表")
                     except Exception as e:
                         QMessageBox.warning(self, "警告", f"加载Excel文件失败: {str(e)}")
+                elif file_path.lower().endswith('.pdf'):
+                    progress = QProgressDialog("正在解析PDF文件，请稍候...", "取消", 0, 0, self)
+                    progress.setWindowTitle("PDF处理中")
+                    progress.setModal(True)
+                    progress.show()
+                    QApplication.processEvents()
+
+                    try:
+                        progress.setLabelText("正在读取PDF文本...")
+                        QApplication.processEvents()
+
+                        self.reset_pdf_state()
+                        display_text = self.load_pdf_with_pymupdf(file_path)
+                        if display_text is None:
+                            progress.close()
+                            return
+
+                        if not self.pdf_char_map:
+                            progress.close()
+                            QMessageBox.warning(self, "警告", "未检测到可解析的文本内容，可能是扫描件PDF")
+                            self.reset_pdf_state()
+                            return
+
+                        progress.setLabelText("正在缓存原PDF字体...")
+                        QApplication.processEvents()
+                        self.build_pdf_font_cache()
+
+                        self.pdf_edit.setPlainText(display_text)
+                        self.content_tabs.setCurrentIndex(1)
+                        self.is_pdf_source = True
+                        self.pdf_redaction_history.clear()
+
+                        progress.close()
+                        QMessageBox.information(self, "PDF加载完成", 
+                            f"PDF文件已成功解析，可直接在界面中进行脱敏操作\n"
+                            f"文件: {os.path.basename(file_path)}")
+                        self.status_label.setText("PDF文本已加载，支持原格式脱敏")
+                    except Exception as e:
+                        progress.close()
+                        QMessageBox.warning(self, "警告", f"处理PDF文件失败: {str(e)}")
+                        self.reset_pdf_state()
+                        return
                 elif file_path.lower().endswith(('.docx', '.doc')):
                     try:
                         # .doc 文件仅提示用户先转换为 .docx，避免直接处理
@@ -2212,6 +3149,7 @@ class UniversalRedactionTool(QMainWindow):
                             return
 
                         # 处理DOCX文档
+                        self.is_pdf_source = False  # 标记非PDF来源
                         content = self.load_word_document(file_path)
                         if content is not None:
                             self.word_edit.setPlainText(content)
@@ -2299,13 +3237,19 @@ class UniversalRedactionTool(QMainWindow):
                 return
             elif self.input_file_path.endswith('.docx'):
                 self.save_word_changes()
+            elif self.input_file_path.endswith('.pdf'):
+                # PDF文件：从PDF标签页保存内容
+                self.save_pdf_changes()
             else:
                 QMessageBox.warning(self, "警告", "当前文件类型不支持交互式脱敏")
                 return
             
             QMessageBox.information(self, "完成", f"文件已保存到: {self.output_file_path}")
 
-            # 新增：询问是否打开文件
+            # 新增：询问是否导出日志
+            log_exported = self.show_export_log_dialog()
+
+            # 询问是否打开文件
             reply = QMessageBox.question(self, "打开文件", "是否立即打开刚保存的文件？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
                 try:
@@ -2346,16 +3290,40 @@ class UniversalRedactionTool(QMainWindow):
                     ws_new = wb_new[self.current_sheet_name] if self.current_sheet_name in wb_new.sheetnames else wb_new.active
                     
                     # 用界面上修改后的数据更新工作表，但保持原有格式
-                    for row in range(self.table_widget.rowCount()):
-                        for col in range(self.table_widget.columnCount()):
-                            item = self.table_widget.item(row, col)
+                    for row in self.table_widget.selectedItems():
+                        if row:
+                            row_idx = row.row()
+                            col_idx = row.column()
+                            cell = ws_new.cell(row_idx + 1, col_idx + 1)
+                            item = self.table_widget.item(row_idx, col_idx)
                             if item:
-                                cell = ws_new.cell(row + 1, col + 1)
                                 cell.value = item.text()
                                 # 如果有保存的格式信息，应用格式
-                                self.apply_cell_format(cell, row, col)
+                                self.apply_cell_format(cell, row_idx, col_idx)
+
+                    # 处理未选中但在历史记录中的单元格
+                    for row_idx in range(self.table_widget.rowCount()):
+                        for col_idx in range(self.table_widget.columnCount()):
+                            item = self.table_widget.item(row_idx, col_idx)
+                            if item:
+                                # 检查该单元格是否在当前选中范围内
+                                if not any(row_idx == r.row() and col_idx == r.column() for r in self.table_widget.selectedItems()):
+                                    cell = ws_new.cell(row_idx + 1, col_idx + 1)
+                                    cell.value = item.text()
+                                    # 如果有保存的格式信息，应用格式
+                                    self.apply_cell_format(cell, row_idx, col_idx)
             
-            wb_new.save(self.output_file_path)
+            try:
+                wb_new.save(self.output_file_path)
+            except PermissionError:
+                QMessageBox.critical(self, "文件权限错误", 
+                    f"无法保存文件到：{self.output_file_path}\n\n"
+                    "可能的解决方案：\n"
+                    "1. 关闭正在使用该文件的Excel程序\n"
+                    "2. 检查文件是否设为只读\n"
+                    "3. 以管理员身份运行本程序\n"
+                    "4. 选择其他保存位置")
+                return  # 停止处理
             
         except Exception as e:
             # 如果格式保持失败，使用简化方法
@@ -2378,7 +3346,17 @@ class UniversalRedactionTool(QMainWindow):
                 if item and item.text():
                     ws_new.cell(row + 1, col + 1).value = item.text()
         
-        wb_new.save(self.output_file_path)
+        try:
+            wb_new.save(self.output_file_path)
+        except PermissionError:
+            QMessageBox.critical(self, "文件权限错误", 
+                f"无法保存文件到：{self.output_file_path}\n\n"
+                "可能的解决方案：\n"
+                "1. 关闭正在使用该文件的Excel程序\n"
+                "2. 检查文件是否设为只读\n"
+                "3. 以管理员身份运行本程序\n"
+                "4. 选择其他保存位置")
+            return
     
     def save_text_changes(self):
         """保存文本文件的交互式修改"""
@@ -2387,20 +3365,25 @@ class UniversalRedactionTool(QMainWindow):
         
         # 使用原始编码保存
         encoding = getattr(self, 'original_encoding', 'utf-8')
-        with open(self.output_file_path, 'w', encoding=encoding) as f:
-            f.write(content)
+        try:
+            with open(self.output_file_path, 'w', encoding=encoding) as f:
+                f.write(content)
+        except PermissionError:
+            QMessageBox.critical(self, "文件权限错误", 
+                f"无法保存文件到：{self.output_file_path}\n\n"
+                "可能的解决方案：\n"
+                "1. 关闭正在使用该文件的其他程序\n"
+                "2. 检查文件是否设为只读\n"
+                "3. 以管理员身份运行本程序\n"
+                "4. 选择其他保存位置")
+            raise
     
     def save_word_changes(self):
         """保存Word文档的交互式修改（保持原格式）"""
         try:
             if not hasattr(self, 'current_word_doc') or not self.current_word_doc:
-                QMessageBox.warning(self, "警告", "没有加载的Word文档")
+                QMessageBox.warning(self, "警告", "没有加载可保存的 Word 文档，请先打开文件。")
                 return
-                
-            # 获取编辑器中的内容
-            new_content = self.word_edit.toPlainText()
-            
-            # 重新加载原始文档以进行替换操作
             from docx import Document
             
             # 只支持DOCX文件的保存
@@ -2418,6 +3401,9 @@ class UniversalRedactionTool(QMainWindow):
             # 获取原始文本内容（用于比对）
             original_text = self.get_word_text_content(doc)
             
+            # 获取编辑器内容作为新内容
+            new_content = self.word_edit.toPlainText()
+            
             # 计算需要替换的内容
             replacements = self.calculate_text_replacements(original_text, new_content)
             
@@ -2432,8 +3418,18 @@ class UniversalRedactionTool(QMainWindow):
             else:
                 output_path = os.path.splitext(self.output_file_path)[0] + '.docx'
             
-            doc.save(output_path)
-            self.output_file_path = output_path
+            try:
+                doc.save(output_path)
+                self.output_file_path = output_path
+            except PermissionError:
+                QMessageBox.critical(self, "文件权限错误", 
+                    f"无法保存文件到：{output_path}\n\n"
+                    "可能的解决方案：\n"
+                    "1. 关闭正在使用该文件的Word程序\n"
+                    "2. 检查文件是否设为只读\n"
+                    "3. 以管理员身份运行本程序\n"
+                    "4. 选择其他保存位置")
+                raise
             
             # 已保存，主流程统一弹窗，无需此处弹窗
             
@@ -2441,6 +3437,83 @@ class UniversalRedactionTool(QMainWindow):
             QMessageBox.warning(self, "警告", "未安装python-docx库，无法保存DOCX文件")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存Word文档时出错: {str(e)}")
+
+    def save_pdf_changes(self):
+        """保存PDF文档的交互式修改（直接在PDF上写入）"""
+        progress = QProgressDialog("正在保存PDF文件，请稍候...", "取消", 0, 0, self)
+        progress.setWindowTitle("PDF保存中")
+        progress.setModal(True)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            progress.setLabelText("正在准备PDF文档...")
+            QApplication.processEvents()
+
+            doc = fitz.open(self.input_file_path)
+            self.pdf_doc = doc
+            self.build_pdf_font_cache()
+
+            output_path = self.output_file_path
+            if not output_path.lower().endswith('.pdf'):
+                output_path = os.path.splitext(output_path)[0] + '.pdf'
+                self.output_file_path = output_path
+
+            if not self.pdf_pending_redactions:
+                # 没有实际修改，直接另存即可
+                doc.save(self.output_file_path)
+                progress.close()
+                return
+
+            progress.setLabelText("正在应用脱敏内容...")
+            QApplication.processEvents()
+
+            applied_segments = 0
+            redacted_pages = set()
+            for operation in self.pdf_pending_redactions:
+                segments = operation.get('segments', [])
+                for segment in segments:
+                    page_index = segment.get('page', 0)
+                    if page_index >= doc.page_count:
+                        continue
+                    page = doc.load_page(page_index)
+                    if self.apply_pdf_segment(page, segment):
+                        applied_segments += 1
+                        redacted_pages.add(page_index)
+
+            if applied_segments == 0:
+                progress.close()
+                QMessageBox.warning(self, "提示", "未能在PDF中定位可写入的文本区域，已保留原PDF")
+                doc.save(self.output_file_path)
+                return
+
+            # 应用所有红线脱敏标记，彻底删除原文
+            for page_index in sorted(redacted_pages):
+                try:
+                    redact_page = doc.load_page(page_index)
+                    redact_page.apply_redactions()
+                except Exception as apply_err:
+                    print(f"应用PDF红线脱敏失败: 页面 {page_index}, 错误: {apply_err}")
+
+            progress.setLabelText("正在写出PDF文件...")
+            QApplication.processEvents()
+            doc.save(self.output_file_path, garbage=4, deflate=True)
+            progress.close()
+            self.pdf_pending_redactions = []
+
+        except PermissionError:
+            progress.close()
+            QMessageBox.critical(self, "文件权限错误", 
+                f"无法保存文件到：{self.output_file_path}\n\n"
+                "可能的解决方案：\n"
+                "1. 关闭正在使用该文件的PDF阅读器\n"
+                "2. 检查文件是否设为只读\n"
+                "3. 以管理员身份运行本程序\n"
+                "4. 选择其他保存位置")
+            raise
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "错误", f"保存PDF文档时出错: {str(e)}")
 
     def get_word_text_content(self, doc):
         """提取Word文档的纯文本内容"""
@@ -2569,13 +3642,20 @@ class UniversalRedactionTool(QMainWindow):
                                 if cell.value is not None:
                                     cell_value = str(cell.value)
                                     original_value = cell_value
+                                    applied_rules = []  # 记录应用的规则
+                                    
                                     for rule in self.rule_engine.get_active_rules():
+                                        old_value = cell_value
                                         if rule.name == "自定义字段":
                                             custom_fields = getattr(self, 'custom_fields', None)
                                             cell_value = self.rule_engine.apply_redaction_rule(rule, cell_value, custom_fields)
                                         else:
                                             custom_names = getattr(self, 'custom_names', None)
                                             cell_value = self.rule_engine.apply_redaction_rule(rule, cell_value, custom_names)
+                                        
+                                        # 如果这个规则产生了变化，记录它
+                                        if cell_value != old_value:
+                                            applied_rules.append(rule)
                                     
                                     # 更新单元格值并保持格式
                                     target_cell = ws_new[cell.coordinate]
@@ -2584,13 +3664,21 @@ class UniversalRedactionTool(QMainWindow):
                                         
                                         # 记录自动脱敏历史（仅限活动工作表用于界面显示）
                                         if ws_name == wb_original.active.title:
+                                            # 使用最后一个应用的规则，或者合并规则名
+                                            rule_names = [r.name for r in applied_rules] if applied_rules else ['自动规则脱敏']
+                                            primary_rule = applied_rules[-1] if applied_rules else None
+                                            
                                             auto_redaction_history.append({
                                                 'row': cell.row - 1,  # 转换为0索引
                                                 'col': cell.column - 1,
                                                 'original_text': original_value,
                                                 'redacted_text': cell_value,
                                                 'original_background': QColor(),
-                                                'original_tooltip': ''
+                                                'original_tooltip': '',
+                                                'rule_name': ', '.join(rule_names),  # 合并所有应用的规则名
+                                                'mode': '自动规则脱敏',
+                                                'timestamp': self.get_current_timestamp(),
+                                                'rule': primary_rule  # 保存主要规则对象引用
                                             })
                                     
                                     # 复制所有格式属性
@@ -2602,7 +3690,17 @@ class UniversalRedactionTool(QMainWindow):
                                         target_cell.protection = copy(cell.protection)
                                         target_cell.alignment = copy(cell.alignment)
 
-                    wb_new.save(self.output_file_path)
+                    try:
+                        wb_new.save(self.output_file_path)
+                    except PermissionError:
+                        QMessageBox.critical(self, "文件权限错误", 
+                            f"无法保存文件到：{self.output_file_path}\n\n"
+                            "可能的解决方案：\n"
+                            "1. 关闭正在使用该文件的Excel程序\n"
+                            "2. 检查文件是否设为只读\n"
+                            "3. 以管理员身份运行本程序\n"
+                            "4. 选择其他保存位置")
+                        return  # 停止处理
                     
                     # 保存历史记录
                     if auto_redaction_history:
@@ -2689,7 +3787,7 @@ class UniversalRedactionTool(QMainWindow):
                     doc = Document(self.input_file_path)
 
                     # 段落
-                    for para in doc.paragraphs:
+                    for para_idx, para in enumerate(doc.paragraphs):
                         original_text = para.text
                         processed_text = original_text
                         for rule in self.rule_engine.get_active_rules():
@@ -2701,11 +3799,21 @@ class UniversalRedactionTool(QMainWindow):
                                 processed_text = self.rule_engine.apply_redaction_rule(rule, processed_text, custom_names)
                         if original_text != processed_text:
                             para.text = processed_text
+                            # 记录Word脱敏历史
+                            self.word_redaction_history.append({
+                                'original': original_text,
+                                'redacted': processed_text,
+                                'timestamp': self.get_current_timestamp(),
+                                'rule_name': '自动脱敏',
+                                'mode': '自动脱敏',
+                                'rule_type': '规则引擎',
+                                'position_desc': f"段落 {para_idx + 1}"
+                            })
 
                     # 表格
-                    for table in doc.tables:
-                        for row in table.rows:
-                            for cell in row.cells:
+                    for table_idx, table in enumerate(doc.tables):
+                        for row_idx, row in enumerate(table.rows):
+                            for cell_idx, cell in enumerate(row.cells):
                                 original_text = cell.text
                                 processed_text = original_text
                                 for rule in self.rule_engine.get_active_rules():
@@ -2717,13 +3825,33 @@ class UniversalRedactionTool(QMainWindow):
                                         processed_text = self.rule_engine.apply_redaction_rule(rule, processed_text, custom_names)
                                 if original_text != processed_text:
                                     cell.text = processed_text
+                                    # 记录Word表格脱敏历史
+                                    self.word_redaction_history.append({
+                                        'original': original_text,
+                                        'redacted': processed_text,
+                                        'timestamp': self.get_current_timestamp(),
+                                        'rule_name': '自动脱敏',
+                                        'mode': '自动脱敏',
+                                        'rule_type': '规则引擎',
+                                        'position_desc': f"表格{table_idx + 1} 行{row_idx + 1} 列{cell_idx + 1}"
+                                    })
 
                     # 保存为 docx
-                    if self.output_file_path.lower().endswith('.docx'):
-                        doc.save(self.output_file_path)
-                    else:
-                        output_path = os.path.splitext(self.output_file_path)[0] + '.docx'
-                        doc.save(output_path)
+                    try:
+                        if self.output_file_path.lower().endswith('.docx'):
+                            doc.save(self.output_file_path)
+                        else:
+                            output_path = os.path.splitext(self.output_file_path)[0] + '.docx'
+                            doc.save(output_path)
+                    except PermissionError:
+                        QMessageBox.critical(self, "文件权限错误", 
+                            f"无法保存文件到：{self.output_file_path}\n\n"
+                            "可能的解决方案：\n"
+                            "1. 关闭正在使用该文件的Word程序\n"
+                            "2. 检查文件是否设为只读\n"
+                            "3. 以管理员身份运行本程序\n"
+                            "4. 选择其他保存位置")
+                        return  # 停止处理
                         self.output_file_path = output_path
 
                 except ImportError:
@@ -2771,7 +3899,8 @@ class UniversalRedactionTool(QMainWindow):
                     return
 
                 processed_lines = []
-                for line in lines:
+                for line_idx, line in enumerate(lines):
+                    original_line = line
                     processed_line = line
                     for rule in self.rule_engine.get_active_rules():
                         if rule.name == "自定义字段":
@@ -2780,10 +3909,60 @@ class UniversalRedactionTool(QMainWindow):
                         else:
                             custom_names = getattr(self, 'custom_names', None)
                             processed_line = self.rule_engine.apply_redaction_rule(rule, processed_line, custom_names)
+                    
+                    # 记录文本脱敏历史
+                    if original_line != processed_line:
+                        self.text_redaction_history.append({
+                            'original': original_line.strip(),
+                            'redacted': processed_line.strip(),
+                            'timestamp': self.get_current_timestamp(),
+                            'rule_name': '自动脱敏',
+                            'mode': '自动脱敏',
+                            'rule_type': '规则引擎',
+                            'position_desc': f"第 {line_idx + 1} 行"
+                        })
+                    
                     processed_lines.append(processed_line)
 
-                with open(self.output_file_path, 'w', encoding=encoding) as f:
-                    f.writelines(processed_lines)
+                try:
+                    with open(self.output_file_path, 'w', encoding=encoding) as f:
+                        f.writelines(processed_lines)
+                except PermissionError:
+                    QMessageBox.critical(self, "文件权限错误", 
+                        f"无法保存文件到：{self.output_file_path}\n\n"
+                        "可能的解决方案：\n"
+                        "1. 关闭正在使用该文件的其他程序\n"
+                        "2. 检查文件是否设为只读\n"
+                        "3. 以管理员身份运行本程序\n"
+                        "4. 选择其他保存位置")
+                    return  # 停止处理
+
+            # PDF文件处理
+            elif self.input_file_path.lower().endswith('.pdf'):
+                self.reset_pdf_state()
+                display_text = self.load_pdf_with_pymupdf(self.input_file_path)
+
+                if display_text is None or not self.pdf_char_map:
+                    QMessageBox.warning(self, "警告", "未能解析PDF文本，可能为扫描件或受保护的PDF")
+                    return
+
+                operations, updated_text = self.auto_redact_pdf()
+
+                if not operations:
+                    doc = fitz.open(self.input_file_path)
+                    doc.save(self.output_file_path)
+                    doc.close()
+                    QMessageBox.information(self, "提示", "未检测到可脱敏的内容，已复制原PDF文件。")
+                    return
+
+                self.pdf_pending_redactions = operations
+                self.pdf_redaction_history.extend(operations)
+                self.pdf_edit.setPlainText(updated_text)
+                self.content_tabs.setCurrentIndex(1)
+                self.is_pdf_source = True
+
+                self.save_pdf_changes()
+                self.status_label.setText(f"自动脱敏完成 {len(operations)} 处敏感信息")
 
             else:
                 QMessageBox.warning(self, "警告", "不支持的文件格式")
@@ -2791,7 +3970,10 @@ class UniversalRedactionTool(QMainWindow):
             QMessageBox.information(self, "成功", "文件脱敏处理完成")
             self.status_label.setText("处理完成")
 
-            # 新增：询问是否打开文件
+            # 新增：询问是否导出日志
+            log_exported = self.show_export_log_dialog()
+
+            # 询问是否打开文件
             reply = QMessageBox.question(self, "打开文件", "是否立即打开刚保存的文件？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
                 try:
@@ -2831,11 +4013,11 @@ class UniversalRedactionTool(QMainWindow):
         <p><b>✅ 当前激活规则：</b><br>
         """ + "<br>".join([f"• {rule.name}" for rule in active_rules]) + """</p>
         
-        <p><b>📁 支持格式：</b>Excel (.xlsx)、Word (.docx)、文本 (.txt)</p>
+    <p><b>📁 支持格式：</b>Excel (.xlsx)、Word (.docx)、文本 (.txt)、PDF (.pdf)</p>
         
-        <p><b>� 使用步骤：</b>选择文件或文件夹 → 选择输出目录 → 自动处理完成</p>
+    <p><b>🛠️ 使用步骤：</b>选择文件或文件夹 → 选择输出目录 → 自动处理完成</p>
         
-        <p><b>�💡 提示：</b>输出文件将自动添加"（脱敏）"标识</p>
+    <p><b>💡 提示：</b>输出文件将自动添加"（脱敏）"标识</p>
         """
         
         # 选择批量处理方式
@@ -2845,8 +4027,8 @@ class UniversalRedactionTool(QMainWindow):
         choice_dialog.setIcon(QMessageBox.Icon.Question)
         
         folder_btn = choice_dialog.addButton("📁 选择文件夹", QMessageBox.ButtonRole.AcceptRole)
-        multi_files_btn = choice_dialog.addButton("📄 多选文件", QMessageBox.ButtonRole.AcceptRole)
-        cancel_btn = choice_dialog.addButton("❌ 取消", QMessageBox.ButtonRole.RejectRole)
+        multi_files_btn = choice_dialog.addButton("多选文件", QMessageBox.ButtonRole.AcceptRole)
+        cancel_btn = choice_dialog.addButton("取消", QMessageBox.ButtonRole.RejectRole)
         
         choice_dialog.exec()
         clicked_btn = choice_dialog.clickedButton()
@@ -2880,7 +4062,7 @@ class UniversalRedactionTool(QMainWindow):
             
             # 获取文件夹中的所有支持文件
             for filename in os.listdir(input_dir):
-                if filename.lower().endswith(('.xlsx', '.docx', '.txt')):
+                if filename.lower().endswith(('.xlsx', '.docx', '.txt', '.pdf')):
                     input_files.append(os.path.join(input_dir, filename))
                     
         elif clicked_btn == multi_files_btn:
@@ -2890,7 +4072,7 @@ class UniversalRedactionTool(QMainWindow):
                 self,
                 "选择需要批量处理的文件（可多选）",
                 script_dir,
-                "支持的文件 (*.xlsx *.docx *.txt);;Excel文件 (*.xlsx);;Word文档 (*.docx);;文本文件 (*.txt);;所有文件 (*)"
+                "支持的文件 (*.xlsx *.docx *.txt *.pdf);;Excel文件 (*.xlsx);;Word文档 (*.docx);;PDF文档 (*.pdf);;文本文件 (*.txt);;所有文件 (*)"
             )
             if not file_paths:
                 return
@@ -2974,7 +4156,11 @@ class UniversalRedactionTool(QMainWindow):
                                             if hasattr(cell, 'style'):
                                                 ws_new[cell.coordinate].style = copy(cell.style)
                             
-                            wb_new.save(output_path)
+                            try:
+                                wb_new.save(output_path)
+                            except PermissionError:
+                                failed_files.append(f"{filename} (文件权限错误: 无法保存到 {output_path})")
+                                continue
                             
                         except Exception as e:
                             failed_files.append(f"{filename} (Excel处理失败: {str(e)})")
@@ -3033,7 +4219,11 @@ class UniversalRedactionTool(QMainWindow):
                                             cell.text = processed_text
                             
                             # 保存DOCX文档
-                            doc.save(output_path)
+                            try:
+                                doc.save(output_path)
+                            except PermissionError:
+                                failed_files.append(f"{filename} (文件权限错误: 无法保存到 {output_path})")
+                                continue
                             
                         except ImportError:
                             failed_files.append(f"{filename} (需要python-docx库处理Word文档)")
@@ -3078,8 +4268,62 @@ class UniversalRedactionTool(QMainWindow):
                                 processed_content = self.rule_engine.apply_redaction_rule(rule, processed_content)
                         
                         # 写入文件
-                        with open(output_path, 'w', encoding=encoding) as f:
-                            f.write(processed_content)
+                        try:
+                            with open(output_path, 'w', encoding=encoding) as f:
+                                f.write(processed_content)
+                        except PermissionError:
+                            failed_files.append(f"{filename} (文件权限错误: 无法保存到 {output_path})")
+                            continue
+                    
+                    elif filename.lower().endswith('.pdf'):
+                        # 处理PDF文件 - 直接使用PyMuPDF保持原格式
+                        self.status_label.setText(f"正在处理PDF: {filename}")
+                        QApplication.processEvents()
+
+                        previous_input = getattr(self, 'input_file_path', None)
+                        previous_output = getattr(self, 'output_file_path', None)
+
+                        try:
+                            if self.is_pdf_image_based(input_path):
+                                failed_files.append(f"{filename} (图片型PDF暂不支持)")
+                            else:
+                                self.reset_pdf_state()
+                                self.input_file_path = input_path
+                                self.output_file_path = output_path
+
+                                display_text = self.load_pdf_with_pymupdf(input_path)
+                                if display_text is None or not self.pdf_char_map:
+                                    failed_files.append(f"{filename} (无法解析PDF文本)")
+                                else:
+                                    operations, _ = self.auto_redact_pdf()
+
+                                    if not operations:
+                                        doc = fitz.open(input_path)
+                                        doc.save(output_path)
+                                        doc.close()
+                                    else:
+                                        self.pdf_pending_redactions = operations
+                                        self.save_pdf_changes()
+
+                                    processed_count += 1
+                        except Exception as e:
+                            failed_files.append(f"{filename} (PDF处理失败: {str(e)})")
+                        finally:
+                            self.reset_pdf_state()
+                            if previous_input is not None:
+                                self.input_file_path = previous_input
+                            else:
+                                if hasattr(self, 'input_file_path'):
+                                    del self.input_file_path
+                            if previous_output is not None:
+                                self.output_file_path = previous_output
+                            else:
+                                if hasattr(self, 'output_file_path'):
+                                    del self.output_file_path
+
+                        self.progress_bar.setValue(i + 1)
+                        QApplication.processEvents()
+                        continue
                     
                     processed_count += 1
                     self.progress_bar.setValue(i + 1)
@@ -3125,7 +4369,7 @@ class UniversalRedactionTool(QMainWindow):
                 QMessageBox.warning(self, "警告", "选中的文本为空")
                 return
                 
-            # 智能脱敏选中文本
+            # 使用内置算法进行脱敏
             redacted_text = self.smart_redact_text(selected_text)
             
             # 记录撤销历史
@@ -3135,7 +4379,12 @@ class UniversalRedactionTool(QMainWindow):
                 'start': start_pos,
                 'end': start_pos + len(redacted_text),
                 'original': selected_text,
-                'redacted': redacted_text
+                'redacted': redacted_text,
+                'timestamp': self.get_current_timestamp(),
+                'rule_name': '交互式脱敏',
+                'mode': '交互式脱敏',
+                'rule_type': '内置算法',
+                'position_desc': f"字符位置 {start_pos}-{end_pos}"
             })
             
             cursor.insertText(redacted_text)
@@ -3155,7 +4404,7 @@ class UniversalRedactionTool(QMainWindow):
             # 获取全文内容
             full_text = self.text_edit.toPlainText()
             
-            # 智能脱敏选中文本
+            # 使用内置算法进行脱敏
             redacted_text = self.smart_redact_text(selected_text)
             
             # 记录批量撤销历史
@@ -3165,7 +4414,12 @@ class UniversalRedactionTool(QMainWindow):
                 'original': selected_text,
                 'redacted': redacted_text,
                 'count': count,
-                'full_original': full_text
+                'full_original': full_text,
+                'timestamp': self.get_current_timestamp(),
+                'rule_name': '交互式脱敏',
+                'mode': '交互式脱敏',
+                'rule_type': '内置算法',
+                'position_desc': '整个文档'
             })
             
             # 在全文中替换所有相同的内容
@@ -3180,7 +4434,7 @@ class UniversalRedactionTool(QMainWindow):
             QMessageBox.warning(self, "警告", "请先选择要脱敏的文本")
     
     def smart_redact_text(self, text):
-        """智能脱敏文本内容"""
+        """内置算法脱敏文本内容 - 用于交互式脱敏"""
         import re
         
         # 检测文本类型并应用相应脱敏规则
@@ -3233,7 +4487,7 @@ class UniversalRedactionTool(QMainWindow):
                 QMessageBox.warning(self, "警告", "选中的文本为空")
                 return
                 
-            # 智能脱敏选中文本
+            # 使用内置算法进行脱敏
             redacted_text = self.smart_redact_text(selected_text)
             
             # 记录撤销历史
@@ -3243,7 +4497,12 @@ class UniversalRedactionTool(QMainWindow):
                 'start': start_pos,
                 'end': start_pos + len(redacted_text),
                 'original': selected_text,
-                'redacted': redacted_text
+                'redacted': redacted_text,
+                'timestamp': self.get_current_timestamp(),
+                'rule_name': '交互式脱敏',
+                'mode': '交互式脱敏',
+                'rule_type': '内置算法',
+                'position_desc': f"字符位置 {start_pos}-{end_pos}"
             })
             
             cursor.insertText(redacted_text)
@@ -3263,7 +4522,7 @@ class UniversalRedactionTool(QMainWindow):
             # 获取全文内容
             full_text = self.word_edit.toPlainText()
             
-            # 智能脱敏选中文本
+            # 使用内置算法进行脱敏
             redacted_text = self.smart_redact_text(selected_text)
             
             # 记录批量撤销历史
@@ -3273,7 +4532,12 @@ class UniversalRedactionTool(QMainWindow):
                 'original': selected_text,
                 'redacted': redacted_text,
                 'count': count,
-                'full_original': full_text
+                'full_original': full_text,
+                'timestamp': self.get_current_timestamp(),
+                'rule_name': '交互式脱敏',
+                'mode': '交互式脱敏',
+                'rule_type': '内置算法',
+                'position_desc': '整个文档'
             })
             
             # 在全文中替换所有相同的内容
@@ -3364,21 +4628,26 @@ class UniversalRedactionTool(QMainWindow):
                 original_text = item.text().strip()
                 redacted_text = self.smart_redact_text(original_text)
                 if redacted_text != original_text:
-                    # 记录历史
-                    operation_history.append({
-                        'row': item.row(),
-                        'col': item.column(),
-                        'original_text': original_text,
-                        'redacted_text': redacted_text,
-                        'original_background': item.background(),
-                        'original_tooltip': item.toolTip()
-                    })
-                    
-                    item.setText(redacted_text)
-                    # 标记脱敏的单元格
-                    item.setBackground(QColor(255, 235, 235))  # 浅红色背景
-                    item.setToolTip(f"已脱敏 - 原文本: {original_text}")
-                    redacted_count += 1
+                        # 记录历史
+                        operation_history.append({
+                            'row': item.row(),
+                            'col': item.column(),
+                            'original_text': original_text,
+                            'redacted_text': redacted_text,
+                            'original_background': item.background(),
+                            'original_tooltip': item.toolTip(),
+                            'timestamp': self.get_current_timestamp(),
+                            'rule_name': '交互式脱敏',
+                            'mode': '交互式脱敏',
+                            'rule_type': '内置算法',
+                            'position_desc': f"单元格 {self.get_excel_column_letter(item.column() + 1)}{item.row() + 1}"
+                        })
+                        
+                        item.setText(redacted_text)
+                        # 标记脱敏的单元格
+                        item.setBackground(QColor(255, 235, 235))  # 浅红色背景
+                        item.setToolTip(f"已脱敏 - 原文本: {original_text}")
+                        redacted_count += 1
         
         # 记录撤销历史
         if operation_history:
@@ -3650,7 +4919,7 @@ class UniversalRedactionTool(QMainWindow):
                 item = self.table_widget.item(row, col)
                 if item and target_text in item.text():
                     original_text = item.text()
-                    # 使用智能脱敏替换目标文本
+                    # 使用内置算法替换目标文本
                     redacted_target = self.smart_redact_text(target_text)
                     redacted_text = original_text.replace(target_text, redacted_target)
                     
@@ -3709,15 +4978,23 @@ class UniversalRedactionTool(QMainWindow):
                 padding: 0 5px;
             }
             QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
+                background-color: transparent;
+                color: #3498db;
+                border: 2px solid #3498db;
                 padding: 8px 16px;
-                border-radius: 4px;
+                border-radius: 5px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #2980b9;
+                background-color: rgba(52, 152, 219, 0.14);
+            }
+            QPushButton:pressed {
+                background-color: rgba(52, 152, 219, 0.24);
+            }
+            QPushButton:disabled {
+                color: rgba(52, 152, 219, 0.35);
+                border-color: rgba(52, 152, 219, 0.35);
+                background-color: transparent;
             }
             QTextEdit, QLabel {
                 font-size: 11pt;
@@ -3841,6 +5118,239 @@ class UniversalRedactionTool(QMainWindow):
         if restored_count > 0:
             QMessageBox.information(self, "撤销完成", f"已成功撤销 {restored_count} 处脱敏内容")
 
+    # PDF文档相关方法
+    def show_pdf_context_menu(self, position):
+        """显示PDF编辑器的右键菜单"""
+        # 在自动脱敏模式下不显示右键菜单
+        if self.mode_combo.currentIndex() == 1:  # 自动脱敏模式
+            return
+        self.pdf_menu.exec(self.pdf_edit.mapToGlobal(position))
+        
+    def mark_pdf_redaction(self):
+        """标记选中的PDF文档文本为脱敏内容"""
+        cursor = self.pdf_edit.textCursor()
+        if cursor.hasSelection():
+            selected_text = cursor.selectedText()
+            normalized_text = selected_text.replace('\u2029', '\n')
+            if not normalized_text.strip():
+                QMessageBox.warning(self, "警告", "选中的文本为空")
+                return
+            
+            # 使用内置算法进行脱敏，同时保持原有长度
+            redacted_text = self.generate_redacted_text(normalized_text)
+
+            start_pos = cursor.selectionStart()
+            end_pos = cursor.selectionEnd()
+            if end_pos > len(self.pdf_char_map):
+                QMessageBox.warning(self, "警告", "选中范围超出PDF解析范围")
+                return
+
+            if not self.ensure_pdf_font_context():
+                QMessageBox.warning(self, "提示", "未能准备PDF字体上下文，请重新载入PDF后再试")
+                return
+
+            if 0 <= start_pos < len(self.pdf_char_map):
+                selected_font = self.pdf_char_map[start_pos].get('font')
+                alias = self.get_pdf_font_alias(selected_font)
+                print(f"PDF交互脱敏字体: 原始={selected_font} -> 别名={alias}")
+
+            current_text = ''.join(entry.get('char', '') for entry in self.pdf_char_map)
+            updated_text = current_text[:start_pos] + redacted_text + current_text[end_pos:]
+
+            base_context = {
+                'type': 'single',
+                'rule_name': '交互式脱敏',
+                'mode': '交互式脱敏',
+                'rule_type': '内置算法'
+            }
+
+            def _context_builder(s, e, original_segment, replacement_segment):
+                original_end = s + len(original_segment)
+                return {'position_desc': f"字符位置 {s}-{original_end}"}
+
+            operations = self.build_pdf_operations_from_text(
+                current_text,
+                updated_text,
+                base_context,
+                context_callback=_context_builder
+            )
+
+            if not operations:
+                QMessageBox.warning(self, "警告", "未能定位所选文本的坐标，无法完成脱敏")
+                return
+
+            operation = operations[0]
+            self.pdf_redaction_history.append(operation)
+            self.pdf_pending_redactions.append(operation)
+
+            final_text = ''.join(entry.get('char', '') for entry in self.pdf_char_map)
+            self.pdf_edit.blockSignals(True)
+            self.pdf_edit.setPlainText(final_text.replace('\n', '\u2029'))
+            self.pdf_edit.blockSignals(False)
+
+            new_cursor = self.pdf_edit.textCursor()
+            new_cursor.setPosition(operation.get('start', start_pos))
+            new_cursor.setPosition(operation.get('end', start_pos + len(redacted_text)), new_cursor.KeepAnchor)
+            self.pdf_edit.setTextCursor(new_cursor)
+        else:
+            QMessageBox.warning(self, "警告", "请先选择要脱敏的文本")
+
+    def mark_pdf_redaction_all(self):
+        """标记选中文本在PDF文档中的所有相同内容为脱敏"""
+        cursor = self.pdf_edit.textCursor()
+        if cursor.hasSelection():
+            selected_text = cursor.selectedText()
+            normalized_text = selected_text.replace('\u2029', '\n')
+            if not normalized_text.strip():
+                QMessageBox.warning(self, "警告", "选中的文本为空")
+                return
+            
+            full_text = ''.join(entry.get('char', '') for entry in self.pdf_char_map)
+            occurrences = []
+            search_pos = 0
+            target_len = len(normalized_text)
+            while True:
+                idx = full_text.find(normalized_text, search_pos)
+                if idx == -1:
+                    break
+                occurrences.append(idx)
+                search_pos = idx + target_len
+
+            if len(occurrences) <= 1:
+                QMessageBox.information(self, "提示", "该文本在文档中只出现一次，建议使用单独脱敏")
+                return
+
+            preview_text = normalized_text[:20] + ('...' if len(normalized_text) > 20 else '')
+            reply = QMessageBox.question(
+                self,
+                "确认脱敏",
+                f"在文档中找到 {len(occurrences)} 处相同文本 \"{preview_text}\"\n确定要全部脱敏吗？",
+                QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            redacted_text = self.generate_redacted_text(normalized_text)
+
+            if not self.ensure_pdf_font_context():
+                QMessageBox.warning(self, "提示", "未能准备PDF字体上下文，请重新载入PDF后再试")
+                return
+
+            if occurrences:
+                probe_index = occurrences[0]
+                if 0 <= probe_index < len(self.pdf_char_map):
+                    probe_font = self.pdf_char_map[probe_index].get('font')
+                    alias = self.get_pdf_font_alias(probe_font)
+                    print(f"PDF批量脱敏字体: 原始={probe_font} -> 别名={alias}")
+
+            new_full_text = full_text.replace(normalized_text, redacted_text)
+
+            base_context = {
+                'type': 'batch',
+                'rule_name': '交互式脱敏',
+                'mode': '交互式脱敏',
+                'rule_type': '内置算法'
+            }
+
+            operations = self.build_pdf_operations_from_text(full_text, new_full_text, base_context)
+            if not operations:
+                QMessageBox.warning(self, "警告", "未能定位文本坐标，批量脱敏已取消")
+                return
+
+            if len(operations) != len(occurrences):
+                for op in operations:
+                    self.restore_pdf_characters(op.get('char_backup'))
+                self.pdf_display_text = full_text
+                QMessageBox.warning(self, "警告", "部分文本未能定位，批量脱敏已取消")
+                return
+
+            segments_all = []
+            backup_all = []
+            position_list = []
+            for op in operations:
+                position_list.append(op.get('start', 0))
+                segments_all.extend(op.get('segments', []))
+                backup_all.extend(list(op.get('char_backup', [])))
+
+            final_text = ''.join(entry.get('char', '') for entry in self.pdf_char_map)
+
+            aggregated_operation = {
+                'type': 'replace_all',
+                'target': normalized_text,
+                'replacement': redacted_text,
+                'original': normalized_text,
+                'redacted': redacted_text,
+                'count': len(operations),
+                'positions': position_list,
+                'segments': segments_all,
+                'char_backup': backup_all,
+                'full_original': full_text,
+                'full_new': final_text,
+                'timestamp': self.get_current_timestamp(),
+                'rule_name': '交互式脱敏',
+                'mode': '交互式脱敏',
+                'rule_type': '内置算法'
+            }
+
+            self.pdf_redaction_history.append(aggregated_operation)
+            self.pdf_pending_redactions.append(aggregated_operation)
+
+            self.pdf_edit.blockSignals(True)
+            self.pdf_edit.setPlainText(final_text.replace('\n', '\u2029'))
+            self.pdf_edit.blockSignals(False)
+
+            QMessageBox.information(self, "脱敏完成", f"已成功脱敏 {len(operations)} 处相同内容")
+        else:
+            QMessageBox.warning(self, "警告", "请先选择要脱敏的文本")
+    
+    def undo_pdf_redaction(self):
+        """撤销PDF文档编辑器的脱敏操作"""
+        if not self.pdf_redaction_history:
+            QMessageBox.information(self, "提示", "没有可撤销的脱敏操作")
+            return
+        
+        # 获取用户确认
+        reply = QMessageBox.question(self, "确认撤销", 
+                                   f"确定要撤销最后 {len(self.pdf_redaction_history)} 个脱敏操作吗？",
+                                   QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No)
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        # 逆序撤销操作（后进先出）
+        restored_count = 0
+        while self.pdf_redaction_history:
+            operation = self.pdf_redaction_history.pop()
+            if operation in self.pdf_pending_redactions:
+                self.pdf_pending_redactions.remove(operation)
+
+            # 恢复字符映射
+            for backup in operation.get('char_backup', []):
+                index = backup.get('index')
+                original_char = backup.get('char')
+                if index is not None and 0 <= index < len(self.pdf_char_map):
+                    self.pdf_char_map[index]['char'] = original_char
+
+            if operation.get('type') == 'replace_all':
+                original_text = operation.get('full_original')
+                if original_text is not None:
+                    self.pdf_edit.blockSignals(True)
+                    self.pdf_edit.setPlainText(original_text)
+                    self.pdf_edit.blockSignals(False)
+                restored_count += operation.get('count', 0)
+            else:
+                cursor = self.pdf_edit.textCursor()
+                cursor.setPosition(operation.get('start', 0))
+                cursor.setPosition(operation.get('end', 0), cursor.KeepAnchor)
+                original_text = operation.get('original', '')
+                cursor.insertText(original_text.replace('\n', '\u2029'))
+                restored_count += 1
+        
+        if restored_count > 0:
+            QMessageBox.information(self, "撤销完成", f"已成功撤销 {restored_count} 处脱敏内容")
+
     # 区域撤销功能已移除，仅保留单步撤销
 
     def undo_current_excel_redaction(self):
@@ -3857,6 +5367,476 @@ class UniversalRedactionTool(QMainWindow):
         else:
             # 选中多个单元格，进行区域撤销
             self.undo_region_redaction(selected_items)
+
+    def show_export_log_dialog(self):
+        """显示导出日志对话框，让用户选择是否导出日志"""
+        # 统计脱敏记录数量
+        total_records = 0
+        text_records = len(self.text_redaction_history)
+        word_records = len(self.word_redaction_history)
+        pdf_records = len(self.pdf_redaction_history)
+        excel_records = sum(len(entry.get('operations', [])) for entry in self.excel_redaction_history)
+        total_records = text_records + word_records + pdf_records + excel_records
+        
+        if total_records == 0:
+            # 如果没有脱敏记录，显示提示信息
+            QMessageBox.information(self, "📋 脱敏日志", 
+                "当前没有脱敏操作记录。\n\n"
+                "💡 提示：只有进行了脱敏操作（如选中文本/单元格右键脱敏）才会产生日志记录。")
+            return False
+        
+        # 创建导出日志选择对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📋 导出脱敏日志")
+        dialog.setModal(True)
+        dialog.resize(500, 300)
+        layout = QVBoxLayout()
+        
+        # 信息说明
+        info_label = QLabel(f"""
+<div style='padding: 10px; background-color: #f8f9fa; border-radius: 5px; border-left: 4px solid #007bff;'>
+<h3 style='margin: 0; color: #007bff;'>📊 脱敏操作统计</h3>
+<p style='margin: 5px 0;'><b>文本脱敏记录：</b>{text_records} 条</p>
+<p style='margin: 5px 0;'><b>Word脱敏记录：</b>{word_records} 条</p>
+<p style='margin: 5px 0;'><b>PDF脱敏记录：</b>{pdf_records} 条</p>
+<p style='margin: 5px 0;'><b>Excel脱敏记录：</b>{excel_records} 条</p>
+<p style='margin: 10px 0 0 0; font-weight: bold; color: #28a745;'>总计：{total_records} 条脱敏记录</p>
+</div>
+
+<div style='padding: 10px; margin-top: 10px; background-color: #fff3cd; border-radius: 5px; border-left: 4px solid #ffc107;'>
+<p style='margin: 0; color: #856404;'><b>💡 导出说明：</b>日志将包含原始内容、脱敏后内容、位置信息、使用规则等详细信息，便于审核和备案。</p>
+</div>
+        """)
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # 导出格式说明
+        format_group = QGroupBox("📁 导出格式")
+        format_layout = QVBoxLayout()
+        
+        format_info = QLabel("� PDF格式 (.pdf) - 横向页面，适合打印和存档")
+        format_info.setStyleSheet("color: #007bff; font-weight: bold; padding: 5px;")
+        format_layout.addWidget(format_info)
+        
+        format_group.setLayout(format_layout)
+        layout.addWidget(format_group)
+        
+        # 按钮区域
+        btn_layout = QHBoxLayout()
+        
+        export_btn = QPushButton("导出日志")
+        self.set_hollow_button(export_btn, "#28a745", font_size="14px", padding="10px 20px")
+        export_btn.clicked.connect(lambda: self.export_redaction_log(dialog))
+        
+        skip_btn = QPushButton("跳过")
+        self.set_hollow_button(skip_btn, "#6c757d", font_size="14px", padding="10px 20px")
+        skip_btn.clicked.connect(dialog.reject)
+        
+        btn_layout.addWidget(export_btn)
+        btn_layout.addWidget(skip_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.setLayout(layout)
+        result = dialog.exec_()
+        return result == QDialog.Accepted
+
+    def export_redaction_log(self, dialog):
+        """导出脱敏日志"""
+        try:
+            # 获取导出路径（文件名不能包含冒号，所以用下划线代替）
+            import datetime
+            file_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"脱敏日志_{file_timestamp}"
+            
+            # 导出PDF格式
+            file_path, _ = QFileDialog.getSaveFileName(
+                dialog,
+                "导出PDF日志",
+                f"{default_filename}.pdf",
+                "PDF文件 (*.pdf);;所有文件 (*)"
+            )
+            
+            if file_path:
+                self.export_to_pdf(file_path)
+                dialog.accept()
+            
+        except Exception as e:
+            QMessageBox.critical(dialog, "导出失败", f"导出日志时发生错误：{str(e)}")
+
+    def get_current_timestamp(self):
+        """获取当前时间戳字符串"""
+        import datetime
+        return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def export_to_pdf(self, file_path):
+        """导出日志到PDF文件 - 横向页面格式"""
+        try:
+            from reportlab.lib.pagesizes import A4, landscape
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            from datetime import datetime
+            import os
+
+            # 注册中文字体
+            try:
+                # 尝试使用系统自带的中文字体
+                font_paths = [
+                    'C:/Windows/Fonts/simsun.ttc',  # 宋体
+                    'C:/Windows/Fonts/simhei.ttf',  # 黑体
+                    'C:/Windows/Fonts/simkai.ttf',  # 楷体
+                    'C:/Windows/Fonts/msyh.ttc',    # 微软雅黑
+                ]
+                font_registered = False
+                for font_path in font_paths:
+                    if os.path.exists(font_path):
+                        try:
+                            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+                            font_registered = True
+                            break
+                        except:
+                            continue
+                
+                if not font_registered:
+                    # 如果没有找到中文字体，使用默认字体
+                    font_name = 'Helvetica'
+                else:
+                    font_name = 'ChineseFont'
+            except:
+                font_name = 'Helvetica'
+
+            # 收集所有日志记录
+            all_records = []
+            input_file_path = getattr(self, 'input_file_path', '')
+
+            # 处理文本脱敏记录
+            for i, record in enumerate(self.text_redaction_history):
+                rule_name = record.get('rule_name', '交互式脱敏')
+                mode = record.get('mode', '交互式脱敏')
+                if record.get('type') == 'replace_all':
+                    final_rule = '全文替换' if mode == '交互式脱敏' else rule_name
+                    all_records.append([
+                        str(len(all_records) + 1),
+                        self.truncate_text(input_file_path, 25),
+                        'TXT文本',
+                        mode,
+                        '整个文档',
+                        self.truncate_text(record.get('original', ''), 20),
+                        self.truncate_text(record.get('redacted', ''), 20),
+                        f"{record.get('count', 1)} 处",
+                        self.truncate_text(final_rule, 15),
+                        record.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    ])
+                else:
+                    final_rule = '选中脱敏' if mode == '交互式脱敏' else rule_name
+                    all_records.append([
+                        str(len(all_records) + 1),
+                        self.truncate_text(input_file_path, 25),
+                        'TXT文本',
+                        mode,
+                        f"字符位置 {record.get('start', 0)}-{record.get('end', 0)}",
+                        self.truncate_text(record.get('original', ''), 20),
+                        self.truncate_text(record.get('redacted', ''), 20),
+                        '1 处',
+                        self.truncate_text(final_rule, 15),
+                        record.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    ])
+
+            # 处理Word脱敏记录
+            for i, record in enumerate(self.word_redaction_history):
+                rule_name = record.get('rule_name', '交互式脱敏')
+                mode = record.get('mode', '交互式脱敏')
+                if record.get('type') == 'replace_all':
+                    final_rule = '全文替换' if mode == '交互式脱敏' else rule_name
+                    all_records.append([
+                        str(len(all_records) + 1),
+                        self.truncate_text(input_file_path, 25),
+                        'Word文档',
+                        mode,
+                        '整个文档',
+                        self.truncate_text(record.get('original', ''), 20),
+                        self.truncate_text(record.get('redacted', ''), 20),
+                        f"{record.get('count', 1)} 处",
+                        self.truncate_text(final_rule, 15),
+                        record.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    ])
+                else:
+                    final_rule = '选中脱敏' if mode == '交互式脱敏' else rule_name
+                    all_records.append([
+                        str(len(all_records) + 1),
+                        self.truncate_text(input_file_path, 25),
+                        'Word文档',
+                        mode,
+                        f"字符位置 {record.get('start', 0)}-{record.get('end', 0)}",
+                        self.truncate_text(record.get('original', ''), 20),
+                        self.truncate_text(record.get('redacted', ''), 20),
+                        '1 处',
+                        self.truncate_text(final_rule, 15),
+                        record.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    ])
+
+            # 处理PDF脱敏记录
+            for i, record in enumerate(self.pdf_redaction_history):
+                rule_name = record.get('rule_name', '交互式脱敏')
+                mode = record.get('mode', '交互式脱敏')
+                original_text = record.get('original', record.get('target', ''))
+                redacted_text = record.get('redacted', record.get('replacement', ''))
+                if record.get('type') == 'replace_all':
+                    final_rule = '全文替换' if mode == '交互式脱敏' else rule_name
+                    all_records.append([
+                        str(len(all_records) + 1),
+                        self.truncate_text(input_file_path, 25),
+                        'PDF文档',
+                        mode,
+                        '整个文档',
+                        self.truncate_text(original_text, 20),
+                        self.truncate_text(redacted_text, 20),
+                        f"{record.get('count', 1)} 处",
+                        self.truncate_text(final_rule, 15),
+                        record.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    ])
+                else:
+                    final_rule = '选中脱敏' if mode == '交互式脱敏' else rule_name
+                    all_records.append([
+                        str(len(all_records) + 1),
+                        self.truncate_text(input_file_path, 25),
+                        'PDF文档',
+                        mode,
+                        f"字符位置 {record.get('start', 0)}-{record.get('end', 0)}",
+                        self.truncate_text(original_text, 20),
+                        self.truncate_text(redacted_text, 20),
+                        '1 处',
+                        self.truncate_text(final_rule, 15),
+                        record.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    ])
+
+            # 处理Excel脱敏记录
+            for entry in self.excel_redaction_history:
+                entry_type = entry.get('type', 'unknown')
+                operations = entry.get('operations', [])
+
+                type_map = {
+                    'cell_redaction': '单元格脱敏',
+                    'row_redaction': '行脱敏',
+                    'column_redaction': '列脱敏',
+                    'table_find_replace_redaction': '全表替换',
+                    'auto_rule_redaction': '自动规则脱敏'
+                }
+                operation_type = type_map.get(entry_type, 'Excel脱敏')
+
+                for operation in operations:
+                    row = operation.get('row', 0) + 1
+                    col = operation.get('col', 0) + 1
+                    col_letter = self.get_excel_column_letter(col)
+                    
+                    rule_name = operation.get('rule_name', None)
+                    mode = operation.get('mode', None)
+                    
+                    if entry_type == 'auto_rule_redaction':
+                        if not rule_name:
+                            if 'rule' in operation and hasattr(operation['rule'], 'name'):
+                                final_rule = operation['rule'].name
+                            else:
+                                final_rule = '自动规则脱敏'
+                        else:
+                            final_rule = rule_name
+                        if not mode:
+                            mode = '自动规则脱敏'
+                    else:
+                        final_rule = operation_type
+                        if not mode:
+                            mode = '交互式脱敏'
+
+                    all_records.append([
+                        str(len(all_records) + 1),
+                        self.truncate_text(input_file_path, 25),
+                        'Excel表格',
+                        mode,
+                        f"单元格 {col_letter}{row}",
+                        self.truncate_text(operation.get('original_text', ''), 20),
+                        self.truncate_text(operation.get('redacted_text', ''), 20),
+                        '1 个单元格',
+                        self.truncate_text(final_rule, 15),
+                        operation.get('timestamp', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                    ])
+
+            if all_records:
+                # 创建PDF文档 - 横向页面
+                doc = SimpleDocTemplate(file_path, pagesize=landscape(A4))
+                elements = []
+
+                # 设置样式
+                styles = getSampleStyleSheet()
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontName=font_name,
+                    fontSize=16,
+                    alignment=1,  # 居中
+                    spaceAfter=20
+                )
+                
+                # 添加标题
+                title = Paragraph("文件脱敏日志报告", title_style)
+                elements.append(title)
+                elements.append(Spacer(1, 12))
+                
+                # 添加基本信息
+                info_style = ParagraphStyle(
+                    'InfoStyle',
+                    parent=styles['Normal'],
+                    fontName=font_name,
+                    fontSize=12,
+                    alignment=1,  # 居中对齐
+                    spaceAfter=15
+                )
+                
+                # 统计各类型记录数量
+                text_records = len(self.text_redaction_history)
+                word_records = len(self.word_redaction_history)
+                pdf_records = len(self.pdf_redaction_history)
+                excel_records = sum(len(entry.get('operations', [])) for entry in self.excel_redaction_history)
+                total_records = text_records + word_records + pdf_records + excel_records
+                
+                # 格式化导出时间
+                export_time = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
+                
+                info_text = f"""
+导出时间：{export_time}<br/>
+总记录数：{total_records} 条<br/>
+文本记录：{text_records} 条<br/>
+Word记录：{word_records} 条<br/>
+PDF记录：{pdf_records} 条<br/>
+Excel记录：{excel_records} 条
+                """
+                
+                info_para = Paragraph(info_text, info_style)
+                elements.append(info_para)
+                elements.append(Spacer(1, 20))
+
+                # 创建表格数据
+                table_data = [
+                    ['序号', '原文件路径', '文件类型', '脱敏方式', '位置', '原始内容', '脱敏后内容', '影响数量', '脱敏规则', '操作时间']
+                ]
+                table_data.extend(all_records)
+
+                # 创建表格
+                table = Table(table_data, colWidths=[
+                    0.5*inch,   # 序号
+                    2.0*inch,   # 原文件路径  
+                    0.8*inch,   # 文件类型
+                    1.0*inch,   # 脱敏方式
+                    1.2*inch,   # 位置
+                    1.5*inch,   # 原始内容
+                    1.5*inch,   # 脱敏后内容
+                    0.8*inch,   # 影响数量
+                    1.0*inch,   # 脱敏规则
+                    1.2*inch    # 操作时间
+                ])
+
+                # 设置表格样式
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), font_name),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                    ('FONTNAME', (0, 1), (-1, -1), font_name),
+                    ('FONTSIZE', (0, 1), (-1, -1), 8),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
+                ]))
+
+                elements.append(table)
+                
+                # 生成PDF
+                doc.build(elements)
+
+                QMessageBox.information(self, "导出成功", f"已成功导出 {len(all_records)} 条日志记录到：\n{file_path}")
+            else:
+                QMessageBox.warning(self, "提示", "没有可导出的日志记录")
+
+        except ImportError:
+            QMessageBox.warning(self, "依赖缺失", "导出PDF需要reportlab库\n请运行: pip install reportlab")
+        except PermissionError:
+            QMessageBox.critical(self, "文件保存失败", 
+                "❌ 目标文件正在被其他程序占用或锁定！\n\n"
+                "💡 解决方法：\n"
+                "1️⃣ 关闭所有正在使用该文件的程序（如PDF阅读器等）\n"
+                "2️⃣ 检查文件是否为只读状态，右键文件→属性→取消只读\n"
+                "3️⃣ 如果是同步盘文件，等待同步完成后重试\n"
+                "4️⃣ 尝试选择其他位置保存文件")
+        except Exception as e:
+            if "Permission denied" in str(e) or "errno 13" in str(e).lower():
+                QMessageBox.critical(self, "文件保存失败", 
+                    "❌ 目标文件正在被其他程序占用或锁定！\n\n"
+                    "💡 解决方法：\n"
+                    "1️⃣ 关闭所有正在使用该文件的程序（如PDF阅读器等）\n"
+                    "2️⃣ 检查文件是否为只读状态，右键文件→属性→取消只读\n"
+                    "3️⃣ 如果是同步盘文件，等待同步完成后重试\n"
+                    "4️⃣ 尝试选择其他位置保存文件")
+            else:
+                QMessageBox.critical(self, "导出失败", f"导出PDF日志时发生错误：{str(e)}")
+
+    def truncate_text(self, text, max_length):
+        """截断文本，保留关键内容，处理更美观"""
+        if not text:
+            return ""
+        
+        text = str(text).strip()
+        if len(text) <= max_length:
+            return text
+        
+        # 对于文件路径，优先保留文件名
+        if ('\\' in text or '/' in text) and ('.' in text):
+            # 提取文件名
+            filename = text.split('\\')[-1] if '\\' in text else text.split('/')[-1]
+            if len(filename) <= max_length:
+                return filename
+            else:
+                # 文件名也太长，截断文件名
+                name_part, ext_part = os.path.splitext(filename)
+                if len(ext_part) + 3 < max_length:  # 保留扩展名
+                    return name_part[:max_length-len(ext_part)-3] + '...' + ext_part
+                else:
+                    return filename[:max_length-3] + '...'
+        
+        # 对于普通文本内容
+        if max_length <= 3:
+            return text[:max_length]
+        
+        # 优化显示：如果是中文为主，按字符截断；如果是英文/数字为主，尽量按词截断
+        if len([c for c in text if '\u4e00' <= c <= '\u9fff']) > len(text) * 0.5:
+            # 中文内容：保留前面大部分 + ...
+            return text[:max_length-3] + '...' if len(text) > max_length else text
+        else:
+            # 英文/数字内容：尝试在合适位置截断
+            if max_length <= 10:
+                return text[:max_length-3] + '...'
+            
+            # 找合适的截断点（空格、标点等）
+            truncate_pos = max_length - 3
+            for i in range(min(truncate_pos, len(text)-1), max(truncate_pos-5, 0), -1):
+                if text[i] in ' .,;:!?，。；：！？':
+                    return text[:i] + '...'
+            
+            # 没找到合适截断点，直接截断
+            return text[:max_length-3] + '...'
+
+    def get_excel_column_letter(self, col_num):
+        """将列号转换为Excel列字母（如1->A, 2->B, 27->AA）"""
+        result = ""
+        while col_num > 0:
+            col_num -= 1
+            result = chr(col_num % 26 + ord('A')) + result
+            col_num //= 26
+        return result
     
     def undo_single_cell_redaction(self, cell_item):
         """撤销单个单元格的脱敏"""
