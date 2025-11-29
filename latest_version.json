@@ -1,5 +1,6 @@
 {
-  "version": "2.1.5",
-  "desc": "新增自定义字段规则，界面优化",
+  "version": "2.4.1",
+  "desc": "修复word导出错误；新增预览区清除内容按钮",
   "download_url": "https://gitee.com/daiyixr/universal-desensitization-tool/attach_files/FileMaske.exe"
+
 }
